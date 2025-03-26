@@ -9,7 +9,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 BINARY_NAME=mcp-server
-ECHO_SSE_SERVER=cmd/sse-server/main.go
+ECHO_SSE_SERVER=cmd/echo-sse-server/main.go
 
 all: test build
 

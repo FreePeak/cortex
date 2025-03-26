@@ -8,10 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
 )
 
 const (
@@ -83,41 +81,19 @@ func main() {
 		},
 	}
 
-	// Create repositories
-	resourceRepo := server.NewInMemoryResourceRepository()
-	toolRepo := server.NewInMemoryToolRepository()
-	promptRepo := server.NewInMemoryPromptRepository()
-	sessionRepo := server.NewInMemorySessionRepository()
-	notifier := server.NewNotificationSender("2.0")
-
-	// Add sample data
+	// Use the builder pattern to create the server
 	ctx := context.Background()
-	if err := resourceRepo.AddResource(ctx, sampleResource); err != nil {
-		log.Fatalf("Failed to add sample resource: %v", err)
-	}
+	serverBuilder := builder.NewServerBuilder().
+		WithName(serverName).
+		WithVersion(serverVersion).
+		WithInstructions(serverInstructions).
+		WithAddress(serverAddr).
+		AddResource(ctx, sampleResource).
+		AddTool(ctx, sampleTool).
+		AddPrompt(ctx, samplePrompt)
 
-	if err := toolRepo.AddTool(ctx, sampleTool); err != nil {
-		log.Fatalf("Failed to add sample tool: %v", err)
-	}
-
-	if err := promptRepo.AddPrompt(ctx, samplePrompt); err != nil {
-		log.Fatalf("Failed to add sample prompt: %v", err)
-	}
-
-	// Create service
-	service := usecases.NewServerService(usecases.ServerConfig{
-		Name:               serverName,
-		Version:            serverVersion,
-		Instructions:       serverInstructions,
-		ResourceRepo:       resourceRepo,
-		ToolRepo:           toolRepo,
-		PromptRepo:         promptRepo,
-		SessionRepo:        sessionRepo,
-		NotificationSender: notifier,
-	})
-
-	// Create HTTP server
-	mcpServer := rest.NewMCPServer(service, serverAddr)
+	// Build the MCP server
+	mcpServer := serverBuilder.BuildMCPServer()
 
 	// Handle graceful shutdown
 	shutdown := make(chan os.Signal, 1)

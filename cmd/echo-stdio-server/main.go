@@ -7,11 +7,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
 )
 
 // Create a custom context function that adds a timestamp
@@ -40,42 +38,18 @@ func main() {
 		},
 	}
 
-	// Create repositories
-	logger.Println("Creating tool repository...")
-	toolRepo := server.NewInMemoryToolRepository()
+	// Use the new server builder pattern
 	ctx := context.Background()
-	if err := toolRepo.AddTool(ctx, echoTool); err != nil {
-		logger.Fatalf("Failed to add echo tool: %v", err)
-	}
-
-	// List tools to verify the echo tool was added
-	tools, err := toolRepo.ListTools(ctx)
-	if err != nil {
-		logger.Fatalf("Failed to list tools: %v", err)
-	}
-	logger.Printf("Repository has %d tools:", len(tools))
-	for _, tool := range tools {
-		logger.Printf("- Tool: %s - %s", tool.Name, tool.Description)
-	}
-
-	// Create server service with the echo tool
-	logger.Println("Creating server service...")
-	serviceConfig := usecases.ServerConfig{
-		Name:         "Echo Stdio Server",
-		Version:      "1.0.0",
-		Instructions: "This is a simple echo server that echoes back messages sent to it.",
-		ToolRepo:     toolRepo,
-	}
-	service := usecases.NewServerService(serviceConfig)
-
-	// Create MCP server with a dummy address since we won't be using the HTTP server
-	logger.Println("Creating MCP server...")
-	mcpServer := rest.NewMCPServer(service, ":0")
+	serverBuilder := builder.NewServerBuilder().
+		WithName("Echo Stdio Server").
+		WithVersion("1.0.0").
+		WithInstructions("This is a simple echo server that echoes back messages sent to it.").
+		WithAddress(":0"). // Dummy address since we won't be using HTTP
+		AddTool(ctx, echoTool)
 
 	// Start the stdio server with our custom context function
 	logger.Println("Server ready. You can now send JSON-RPC requests via stdin.")
-	err = stdio.ServeStdio(
-		mcpServer,
+	err := serverBuilder.ServeStdio(
 		stdio.WithErrorLogger(logger),
 		stdio.WithStdioContextFunc(withTimestamp),
 	)

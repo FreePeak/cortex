@@ -534,3 +534,11 @@ func (s *MCPServer) GetServerInfo() (name string, version string, instructions s
 func (s *MCPServer) GetService() *usecases.ServerService {
 	return s.service
 }
+
+// GetAddress returns the server's address
+func (s *MCPServer) GetAddress() string {
+	if s.httpServer != nil {
+		return s.httpServer.Addr
+	}
+	return ""
+}
