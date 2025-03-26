@@ -2,143 +2,154 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain/shared"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases/calculator"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
 )
 
-// SimpleToolHandler is a basic implementation of the ToolHandler interface
-type SimpleToolHandler struct{}
+const (
+	serverName       = "Example MCP Server"
+	serverVersion    = "0.1.0"
+	serverAddr       = ":8080"
+	shutdownTimeout  = 10 * time.Second
+	shutdownGraceful = 2 * time.Second
 
-// ListTools returns a list of available tools
-func (h *SimpleToolHandler) ListTools(ctx context.Context) ([]shared.Tool, error) {
-	return []shared.Tool{
-		{
-			Name:        "hello",
-			Description: "Says hello to someone",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "The name to greet",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "echo",
-			Description: "Echoes back the input",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"text": map[string]interface{}{
-						"type":        "string",
-						"description": "The text to echo",
-					},
-				},
-				"required": []string{"text"},
-			},
-		},
-	}, nil
-}
+	serverInstructions = `
+This is an example MCP server with sample resources, tools, and prompts.
 
-// CallTool executes a tool with the given arguments
-func (h *SimpleToolHandler) CallTool(ctx context.Context, name string, arguments interface{}) ([]shared.Content, error) {
-	switch name {
-	case "hello":
-		args, ok := arguments.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("invalid arguments type")
-		}
+Available resources:
+- sample://hello-world: A hello world resource
 
-		nameArg, ok := args["name"].(string)
-		if !ok {
-			return nil, fmt.Errorf("name argument must be a string")
-		}
+Available tools:
+- echo: Echoes back the input message
 
-		return []shared.Content{
-			shared.TextContent{
-				Type: "text",
-				Text: fmt.Sprintf("Hello, %s!", nameArg),
-			},
-		}, nil
+Available prompts:
+- greeting: A simple greeting prompt
 
-	case "echo":
-		args, ok := arguments.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("invalid arguments type")
-		}
-
-		text, ok := args["text"].(string)
-		if !ok {
-			return nil, fmt.Errorf("text argument must be a string")
-		}
-
-		return []shared.Content{
-			shared.TextContent{
-				Type: "text",
-				Text: text,
-			},
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("unknown tool: %s", name)
-	}
-}
+You can connect to this server from Cursor by going to Settings > Extensions > 
+Model Context Protocol and entering 'http://localhost:8080' as the server URL.
+`
+)
 
 func main() {
-	// Create a new MCP server
-	mcp := server.NewServer(
-		"example-server",
-		"1.0.0",
-		server.WithToolHandler(&SimpleToolHandler{}),
-		server.WithToolHandler(calculator.NewCalculatorHandler()),
-	)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Println("Starting Example MCP Server...")
 
-	// Create a transport for the server
-	httpTransport, err := server.NewHTTPTransportFactory(":8081").CreateTransport()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create transport: %v\n", err)
-		os.Exit(1)
+	// Create sample data
+	sampleResource := &domain.Resource{
+		URI:         "sample://hello-world",
+		Name:        "Hello World Resource",
+		Description: "A sample resource for demonstration purposes",
+		MIMEType:    "text/plain",
 	}
 
-	// Connect the server to the transport
-	if err := mcp.Connect(httpTransport); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to transport: %v\n", err)
-		os.Exit(1)
+	sampleTool := &domain.Tool{
+		Name:        "echo",
+		Description: "Echoes back the input message",
+		Parameters: []domain.ToolParameter{
+			{
+				Name:        "message",
+				Description: "The message to echo back",
+				Type:        "string",
+				Required:    true,
+			},
+		},
 	}
 
-	// Create a context with cancellation for server shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	samplePrompt := &domain.Prompt{
+		Name:        "greeting",
+		Description: "A simple greeting prompt",
+		Template:    "Hello, {{name}}! Welcome to {{place}}.",
+		Parameters: []domain.PromptParameter{
+			{
+				Name:        "name",
+				Description: "The name to greet",
+				Type:        "string",
+				Required:    true,
+			},
+			{
+				Name:        "place",
+				Description: "The place to welcome to",
+				Type:        "string",
+				Required:    true,
+			},
+		},
+	}
+
+	// Create repositories
+	resourceRepo := server.NewInMemoryResourceRepository()
+	toolRepo := server.NewInMemoryToolRepository()
+	promptRepo := server.NewInMemoryPromptRepository()
+	sessionRepo := server.NewInMemorySessionRepository()
+	notifier := server.NewNotificationSender("2.0")
+
+	// Add sample data
+	ctx := context.Background()
+	if err := resourceRepo.AddResource(ctx, sampleResource); err != nil {
+		log.Fatalf("Failed to add sample resource: %v", err)
+	}
+
+	if err := toolRepo.AddTool(ctx, sampleTool); err != nil {
+		log.Fatalf("Failed to add sample tool: %v", err)
+	}
+
+	if err := promptRepo.AddPrompt(ctx, samplePrompt); err != nil {
+		log.Fatalf("Failed to add sample prompt: %v", err)
+	}
+
+	// Create service
+	service := usecases.NewServerService(usecases.ServerConfig{
+		Name:               serverName,
+		Version:            serverVersion,
+		Instructions:       serverInstructions,
+		ResourceRepo:       resourceRepo,
+		ToolRepo:           toolRepo,
+		PromptRepo:         promptRepo,
+		SessionRepo:        sessionRepo,
+		NotificationSender: notifier,
+	})
+
+	// Create HTTP server
+	mcpServer := rest.NewMCPServer(service, serverAddr)
+
+	// Handle graceful shutdown
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+
+	// Start server in a goroutine
+	go func() {
+		if err := mcpServer.Start(); err != nil {
+			if err.Error() != "http: Server closed" {
+				log.Fatalf("Server failed to start: %v", err)
+			}
+		}
+	}()
+
+	log.Printf("Server is running on %s", serverAddr)
+	log.Printf("You can connect to this server from Cursor by going to Settings > Extensions > Model Context Protocol and entering 'http://localhost:8080' as the server URL.")
+	log.Println("Press Ctrl+C to stop")
+
+	// Wait for shutdown signal
+	<-shutdown
+	log.Println("Shutting down server...")
+
+	// Create a context with timeout for shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	// Start the server
-	if err := mcp.Start(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
-		os.Exit(1)
+	// Shutdown server
+	if err := mcpServer.Stop(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	fmt.Println("MCP server started on :8081")
-	fmt.Println("HTTP endpoint: http://localhost:8081")
-	fmt.Println("SSE endpoint: http://localhost:8081/sse")
-	fmt.Println("Press Ctrl+C to stop")
-
-	// Wait for termination signal
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-
-	fmt.Println("Shutting down...")
-
-	// Stop the server
-	if err := mcp.Stop(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error during shutdown: %v\n", err)
-	}
+	// Small delay to allow final cleanup
+	time.Sleep(shutdownGraceful)
+	log.Println("Server stopped gracefully")
 }

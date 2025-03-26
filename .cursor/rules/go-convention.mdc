@@ -1,0 +1,113 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Golang Guidelines
+- Follow the Go style guide (https://go.dev/doc/effective_go).
+- Use lowercase package names (e.g., `http`, `utils`).
+- Prefer explicit error handling with `if err != nil` over panics.
+- Use structs with exported fields (capitalized) for public APIs; lowercase for internal use.
+- Avoid unnecessary interfaces; only define them when multiple implementations are needed.
+- Use `go fmt` style: no unnecessary whitespace, consistent indentation.
+- Structure files: one main type/struct per file with related methods, helpers in separate utils files.
+- Naming: Short, concise, and contextual (e.g., `db` for database, `srv` for server).
+- Applying the Design Pattern when see the use case is fit with any design pattern.
+
+
+# Golang IDE Cursor Rules
+
+These rules govern how the cursor behaves in your IDE to ensure that all generated Golang code passes linters (`golint`), static analysis (`go vet`), and can run without issues.
+
+## Automatic Imports
+
+1. **Auto-import**: When a new package is referenced, the cursor automatically adds the import to the top of the file
+2. **Clean imports**: When removing code that uses an import, the cursor automatically removes unused imports
+3. **Group imports**: Standard library imports are grouped first, followed by third-party libraries, then local packages
+4. **Alphabetical order**: Imports within each group are sorted alphabetically
+
+## Indentation and Formatting
+
+1. **Tab-based indentation**: Always use tabs (not spaces) for indentation
+2. **Auto-format on save**: Always run `gofmt` when saving a file
+3. **Standard bracing**: Opening braces always on the same line as the statement:
+   ```go
+   if condition {
+       // Code
+   }
+   ```
+4. **Line length**: Hard wrap at 100 characters
+
+## Variable and Function Naming
+
+1. **camelCase for private**: Private variables and functions use camelCase
+2. **PascalCase for exported**: Exported variables and functions use PascalCase
+3. **Acronyms**: Acronyms in names are all uppercase (e.g., `HTTPServer` not `HttpServer`)
+4. **Short-lived variables**: Use short names for variables with small scopes
+5. **Descriptive names**: Use descriptive names for exported functions and variables
+6. **Context parameter**: Name the context parameter `ctx` when present
+
+## Error Handling
+
+1. **Error checking**: Every error must be checked - cursor enforces checking after functions that return errors
+2. **Error documentation**: Mandatory error documentation for exported functions
+3. **Error wrapping**: Use `fmt.Errorf("context: %w", err)` for wrapping errors
+4. **Early returns**: The cursor favors early returns for error conditions, reducing nesting
+
+## Comments and Documentation
+
+1. **Package documentation**: Every package has documentation in a separate `doc.go` file
+2. **Function documentation**: All exported functions have godoc-compatible documentation
+3. **Linting comments**: When cursor detects a comment that doesn't start with the name of the thing being commented, it's automatically fixed
+4. **TODO format**: Standard format for TODOs: `// TODO(username): explanation`
+
+## Code Structure
+
+1. **File organization**: Types come first, followed by constants, variables, then functions
+2. **Interface consistency**: Method declarations in interfaces match the same order as their implementations
+3. **Balanced grouping**: Related constants and variables are grouped together
+4. **Method ordering**: Methods for the same type are grouped together
+
+## Testing
+
+1. **Auto-create test**: When creating a new function, the cursor offers to create a corresponding test file
+2. **Table-driven tests**: The cursor prefers table-driven test templates
+3. **Descriptive test names**: Test functions follow the format `TestSubject_Action_Condition`
+4. **Test helper functions**: Helper functions are marked with `t.Helper()`
+
+## Concurrency Patterns
+
+1. **Mutex naming**: Name mutex variables with a `mu` prefix
+2. **Context first**: In function parameters, context is always the first parameter
+3. **Go routine boundary**: When spawning a goroutine, cursor automatically adds comments about responsibility for closure variables
+4. **Channel direction**: Channels always specify direction when used as parameters:
+   ```go
+   func consume(ch <-chan int) {} // Receive-only
+   func produce(ch chan<- int) {} // Send-only
+   ```
+
+## Safe Code Patterns
+
+1. **Nil checks**: Cursor enforces nil checks before dereferencing pointers
+2. **Range copy check**: Warns when using a range variable in a goroutine to prevent closure issues
+3. **Struct initialization**: Enforces field names in struct initialization for clarity
+4. **Blank identifier**: Prompts for a comment when using blank identifier (`_`) to explain why
+
+## IDE Integration Features
+
+1. **Auto-completion**: Intelligent suggestions for functions and variables
+2. **Hover information**: Show documentation, type information, and potential issues on hover
+3. **Jump to definition**: Quick navigation to declarations and implementations
+4. **Find usages**: Locate all references to a symbol across the codebase
+5. **Refactoring tools**: Rename, extract function, and other refactorings with preview
+6. **Error diagnostics**: Real-time error highlighting with suggestions for fixes
+7. **Auto-implement interfaces**: Generate method stubs for implementing interfaces
+
+## Pre-Commit Checks
+
+1. **Automated pre-commit**: Run `golint`, `go vet`, and `go test` before allowing commits
+2. **Dependency check**: Verify dependencies are properly managed and vendored
+3. **License header**: Ensure all new files have the appropriate license header
+4. **Coverage check**: Verify that new code has sufficient test coverage
+
+

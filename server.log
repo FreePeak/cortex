@@ -1,5 +1,0 @@
-Echo server using HTTP transport on :8080
-Starting HTTP server on :8080
-HTTP server error: listen tcp :8080: bind: address already in use
-
-Shutting down...
