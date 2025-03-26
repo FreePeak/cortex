@@ -19,6 +19,9 @@ build:
 example:
 	$(GOCMD) run $(EXAMPLE_SERVER)
 
+example-stdio:
+	cd echo-stdio-test && go run main.go
+
 test:
 	$(GOTEST) -v ./...
 

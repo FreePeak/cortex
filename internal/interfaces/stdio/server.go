@@ -252,6 +252,144 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 		case "ping":
 			result = struct{}{}
 
+		case "tools/list":
+			// Handle tools listing
+			// Access the service through the server to get tools
+			tools, err := s.server.GetService().ListTools(r.Context())
+			if err != nil {
+				resp := rest.JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &rest.JSONRPCError{
+						Code:    -32603,
+						Message: fmt.Sprintf("Internal error: %v", err),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Convert domain tools to response format
+			toolList := make([]map[string]interface{}, len(tools))
+			for i, tool := range tools {
+				// Format parameters as an object with properties
+				parametersObj := make(map[string]interface{})
+				parametersObj["type"] = "object"
+
+				properties := make(map[string]interface{})
+				required := []string{}
+
+				for _, param := range tool.Parameters {
+					paramObj := map[string]interface{}{
+						"type":        param.Type,
+						"description": param.Description,
+					}
+					properties[param.Name] = paramObj
+
+					if param.Required {
+						required = append(required, param.Name)
+					}
+				}
+
+				parametersObj["properties"] = properties
+				if len(required) > 0 {
+					parametersObj["required"] = required
+				}
+
+				// Build tool object
+				toolList[i] = map[string]interface{}{
+					"name":        tool.Name,
+					"description": tool.Description,
+					"inputSchema": parametersObj,
+				}
+			}
+
+			result = map[string]interface{}{
+				"tools": toolList,
+			}
+
+		case "tools/call":
+			// Extract parameters
+			params, ok := req.Params.(map[string]interface{})
+			if !ok {
+				resp := rest.JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &rest.JSONRPCError{
+						Code:    -32602,
+						Message: "Invalid params",
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Get tool name
+			toolName, ok := params["name"].(string)
+			if !ok || toolName == "" {
+				resp := rest.JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &rest.JSONRPCError{
+						Code:    -32602,
+						Message: "Missing or invalid 'name' parameter",
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Get tool parameters
+			toolParams, ok := params["parameters"].(map[string]interface{})
+			if !ok {
+				toolParams = map[string]interface{}{}
+			}
+
+			// Handle specific tools
+			switch toolName {
+			case "mcp_golang_mcp_server_sse_echo":
+				// Handle echo tool
+				message, ok := toolParams["message"].(string)
+				if !ok || message == "" {
+					resp := rest.JSONRPCResponse{
+						JSONRPC: "2.0",
+						ID:      req.ID,
+						Error: &rest.JSONRPCError{
+							Code:    -32602,
+							Message: "Missing or invalid 'message' parameter",
+						},
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(resp)
+					return
+				}
+
+				// Echo the message back
+				result = map[string]interface{}{
+					"content": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": message,
+						},
+					},
+				}
+			default:
+				resp := rest.JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &rest.JSONRPCError{
+						Code:    404,
+						Message: fmt.Sprintf("Tool not found: %s", toolName),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+				return
+			}
+
 		default:
 			// For all other methods, we need to follow the HTTP approach since we don't have access
 			// to the internal implementation

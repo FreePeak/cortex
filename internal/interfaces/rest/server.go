@@ -528,3 +528,9 @@ func sendJSONRPCError(w http.ResponseWriter, id interface{}, code int, message s
 func (s *MCPServer) GetServerInfo() (name string, version string, instructions string) {
 	return s.service.ServerInfo()
 }
+
+// GetService returns the server service.
+// This is useful for external components that need access to the service.
+func (s *MCPServer) GetService() *usecases.ServerService {
+	return s.service
+}

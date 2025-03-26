@@ -4,7 +4,7 @@
             "url": "http://localhost:8080/sse"
         },
         "golang-mcp-server-ws": {
-            "command": "./examples/echo/echo -mode=server -transport=stdio"
+            "command": "/home/linhdmn/work/harvey/dev/FreePeak/Opensource/golang-mcp-server-sdk/bin/echo-stdio-server"
         }
     }
 }
