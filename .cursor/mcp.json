@@ -1,7 +1,8 @@
 {
     "mcpServers": {
         "golang-mcp-server-ws": {
-            "command": "/home/linhdmn/work/harvey/dev/FreePeak/Opensource/golang-mcp-server-sdk/bin/echo-stdio-server"
+            "command": "/home/linhdmn/work/harvey/dev/FreePeak/Opensource/golang-mcp-server-sdk/bin/echo-stdio-server",
+            "args": [">", "/home/linhdmn/work/harvey/dev/FreePeak/Opensource/golang-mcp-server-sdk/run.log"]
         }
     }
 }

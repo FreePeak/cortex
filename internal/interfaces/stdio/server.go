@@ -13,8 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
-	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
@@ -33,6 +33,7 @@ type StdioServer struct {
 	server      *rest.MCPServer
 	errLogger   *log.Logger
 	contextFunc StdioContextFunc
+	mu          sync.Mutex
 }
 
 // StdioOption defines a function type for configuring StdioServer
@@ -52,19 +53,6 @@ func WithStdioContextFunc(fn StdioContextFunc) StdioOption {
 	return func(s *StdioServer) {
 		s.contextFunc = fn
 	}
-}
-
-// stdioSession is a static client session for stdio communication.
-type stdioSession struct {
-	notificationChannel chan domain.JSONRPCNotification
-}
-
-func (s *stdioSession) SessionID() string {
-	return "stdio"
-}
-
-func (s *stdioSession) NotificationChannel() chan<- domain.JSONRPCNotification {
-	return s.notificationChannel
 }
 
 // NewStdioServer creates a new stdio server wrapper around an MCPServer.
@@ -99,37 +87,37 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			// Use a goroutine to make the read cancellable
-			readChan := make(chan string, 1)
-			errChan := make(chan error, 1)
-
-			go func() {
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					errChan <- err
-					return
-				}
-				readChan <- line
-			}()
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case err := <-errChan:
+			// Read a line from stdin
+			line, err := reader.ReadString('\n')
+			if err != nil {
 				if err == io.EOF {
+					s.errLogger.Println("Input stream closed")
 					return nil
 				}
 				s.errLogger.Printf("Error reading input: %v", err)
 				return err
-			case line := <-readChan:
-				if err := s.processMessage(ctx, line, stdout); err != nil {
-					if err == io.EOF {
-						return nil
-					}
-					s.errLogger.Printf("Error handling message: %v", err)
-					return err
-				}
 			}
+
+			// Process the message in a separate goroutine
+			// to avoid blocking the main loop
+			go func(line string) {
+				if err := s.processMessage(ctx, line, stdout); err != nil && err != io.EOF {
+					s.errLogger.Printf("Error processing message: %v", err)
+
+					// Try to send an error response
+					errorResp := rest.JSONRPCResponse{
+						JSONRPC: "2.0",
+						ID:      nil, // We don't know the ID here
+						Error: &rest.JSONRPCError{
+							Code:    -32603,
+							Message: fmt.Sprintf("Internal error: %v", err),
+						},
+					}
+					if writeErr := s.writeResponse(errorResp, stdout); writeErr != nil {
+						s.errLogger.Printf("Failed to write error response: %v", writeErr)
+					}
+				}
+			}(line)
 		}
 	}
 }
@@ -138,7 +126,16 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 // It parses the message, processes it through the wrapped MCPServer, and writes any response.
 // Returns an error if there are issues with message processing or response writing.
 func (s *StdioServer) processMessage(ctx context.Context, line string, writer io.Writer) error {
-	// Parse message as raw JSON
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Trim whitespace from the line
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil // Skip empty lines
+	}
+
+	// Parse the message as raw JSON
 	var rawMessage json.RawMessage
 	if err := json.Unmarshal([]byte(line), &rawMessage); err != nil {
 		response := rest.JSONRPCResponse{
@@ -152,13 +149,15 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 		return s.writeResponse(response, writer)
 	}
 
-	// Create context with timeout - same as in rest implementation
-	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	// Handle the message using the wrapped server
+	// We parse the message to determine the method and handle it
+	var baseMessage struct {
+		JSONRPC string      `json:"jsonrpc"`
+		ID      interface{} `json:"id"`
+		Method  string      `json:"method"`
+	}
 
-	// Parse the request to determine what kind of request we're dealing with
-	var request rest.JSONRPCRequest
-	if err := json.Unmarshal(rawMessage, &request); err != nil {
+	if err := json.Unmarshal(rawMessage, &baseMessage); err != nil {
 		response := rest.JSONRPCResponse{
 			JSONRPC: "2.0",
 			ID:      nil,
@@ -170,37 +169,38 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 		return s.writeResponse(response, writer)
 	}
 
-	// Directly handle the request using our own implementation of the protocol
-	// since we can't call the unexported handleJSONRPC method
-
-	// First, validate the JSON-RPC version
-	if request.JSONRPC != "2.0" {
-		response := rest.JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      request.ID,
-			Error: &rest.JSONRPCError{
-				Code:    -32600,
-				Message: "Invalid JSON-RPC version",
-			},
-		}
-		return s.writeResponse(response, writer)
+	// Check if this is a notification (no ID field)
+	// Notifications don't require responses
+	if baseMessage.ID == nil && strings.HasPrefix(baseMessage.Method, "notifications/") {
+		// Process notification but don't return a response
+		// This is a notification message that doesn't expect a response
+		s.errLogger.Printf("Received notification: %s", baseMessage.Method)
+		return nil
 	}
 
 	// Create a dummy HTTP request and response for the server's HTTP handler
-	// This is a workaround since we can't directly call the handleJSONRPC method
 	w := httptest.NewRecorder()
-	r, err := http.NewRequestWithContext(timeoutCtx, http.MethodPost, "/jsonrpc", strings.NewReader(line))
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "/jsonrpc", strings.NewReader(string(rawMessage)))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 	r.Header.Set("Content-Type", "application/json")
 
-	// Since we can't call handleJSONRPC directly, we'll create a small HTTP server that routes to it
+	// Create a handler to process the request
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Create a new HTTP handler that mimics the MCPServer's behavior
+		// Read the request body
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(w, "Error reading request body", http.StatusBadRequest)
+			response := rest.JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      baseMessage.ID,
+				Error: &rest.JSONRPCError{
+					Code:    -32700,
+					Message: "Error reading request body",
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 
@@ -209,7 +209,7 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 		if err := json.Unmarshal(body, &req); err != nil {
 			resp := rest.JSONRPCResponse{
 				JSONRPC: "2.0",
-				ID:      nil,
+				ID:      baseMessage.ID,
 				Error: &rest.JSONRPCError{
 					Code:    -32700,
 					Message: "Parse error",
@@ -254,7 +254,6 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 
 		case "tools/list":
 			// Handle tools listing
-			// Access the service through the server to get tools
 			tools, err := s.server.GetService().ListTools(r.Context())
 			if err != nil {
 				resp := rest.JSONRPCResponse{
@@ -352,10 +351,76 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 				}
 			}
 
-			// Handle specific tools
-			switch toolName {
-			case "echo", "echo_golang_mcp_server_stdio", "mcp_golang_mcp_server_ws_echo_golang_mcp_server_stdio":
-				// Handle echo tool
+			// Get available tools from the service
+			tools, err := s.server.GetService().ListTools(r.Context())
+			if err != nil {
+				resp := rest.JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &rest.JSONRPCError{
+						Code:    -32603,
+						Message: fmt.Sprintf("Internal error: %v", err),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Find the requested tool
+			var foundTool *domain.Tool
+			var toolFound bool
+
+			for _, tool := range tools {
+				if tool.Name == toolName {
+					foundTool = tool
+					toolFound = true
+					break
+				}
+			}
+
+			if !toolFound {
+				resp := rest.JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &rest.JSONRPCError{
+						Code:    -32601,
+						Message: fmt.Sprintf("Tool not found: %s", toolName),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Validate required parameters
+			missingParams := []string{}
+			for _, param := range foundTool.Parameters {
+				if param.Required {
+					paramValue, exists := toolParams[param.Name]
+					if !exists || paramValue == nil {
+						missingParams = append(missingParams, param.Name)
+					}
+				}
+			}
+
+			if len(missingParams) > 0 {
+				resp := rest.JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &rest.JSONRPCError{
+						Code:    -32602,
+						Message: fmt.Sprintf("Missing required parameters: %s", strings.Join(missingParams, ", ")),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+				return
+			}
+
+			// Handle all echo-related tools
+			if strings.Contains(strings.ToLower(toolName), "echo") {
+				// This is an echo tool
 				message, ok := toolParams["message"].(string)
 				if !ok || message == "" {
 					resp := rest.JSONRPCResponse{
@@ -371,22 +436,17 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 					return
 				}
 
-				// Echo the message back with content as an array of objects
-				result = map[string]interface{}{
-					"content": []map[string]interface{}{
-						{
-							"type": "text",
-							"text": message,
-						},
-					},
-				}
-			default:
+				// Return the echoed message
 				resp := rest.JSONRPCResponse{
 					JSONRPC: "2.0",
 					ID:      req.ID,
-					Error: &rest.JSONRPCError{
-						Code:    404,
-						Message: fmt.Sprintf("Tool not found: %s", toolName),
+					Result: map[string]interface{}{
+						"content": []map[string]interface{}{
+							{
+								"type": "text",
+								"text": message,
+							},
+						},
 					},
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -394,9 +454,28 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 				return
 			}
 
+			// If we get here, the tool is not implemented
+			s.errLogger.Printf("Tool '%s' is not implemented", toolName)
+			resp := rest.JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &rest.JSONRPCError{
+					Code:    -32603,
+					Message: fmt.Sprintf("Tool '%s' is registered but has no implementation", toolName),
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+
 		default:
-			// For all other methods, we need to follow the HTTP approach since we don't have access
-			// to the internal implementation
+			// Check if this is a notification method (starts with "notifications/")
+			if strings.HasPrefix(req.Method, "notifications/") {
+				// This is a notification that doesn't require a response
+				s.errLogger.Printf("Processed notification: %s", req.Method)
+				return
+			}
+
+			// Method not found
 			resp := rest.JSONRPCResponse{
 				JSONRPC: "2.0",
 				ID:      req.ID,
@@ -410,7 +489,7 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 			return
 		}
 
-		// Send response
+		// Send successful response if we get here
 		resp := rest.JSONRPCResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -427,20 +506,59 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 	resp := w.Result()
 	defer resp.Body.Close()
 
-	// Return the response
+	// Read the response body
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("error reading response body: %w", err)
 	}
 
-	_, err = writer.Write(respBody)
-	if err != nil {
-		return err
+	// Fix potential JSON-RPC message format issues
+	var responseObj map[string]interface{}
+	if err := json.Unmarshal(respBody, &responseObj); err != nil {
+		// Invalid JSON response
+		s.errLogger.Printf("Error parsing response: %v", err)
+		errorResp := rest.JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      baseMessage.ID, // Use the original ID
+			Error: &rest.JSONRPCError{
+				Code:    -32603,
+				Message: "Internal error: invalid response format",
+			},
+		}
+		respBody, _ = json.Marshal(errorResp)
+	} else {
+		// Ensure ID is properly set
+		if id, exists := responseObj["id"]; exists && id == nil {
+			if baseMessage.ID != nil {
+				responseObj["id"] = baseMessage.ID
+			} else {
+				responseObj["id"] = ""
+			}
+			respBody, _ = json.Marshal(responseObj)
+		}
+
+		// Ensure there's either a result or an error
+		_, hasResult := responseObj["result"]
+		_, hasError := responseObj["error"]
+
+		if !hasResult && !hasError {
+			// Neither result nor error - add an empty result
+			responseObj["result"] = map[string]interface{}{}
+			respBody, _ = json.Marshal(responseObj)
+		}
 	}
 
-	// Add a newline for the stdio protocol
-	_, err = writer.Write([]byte("\n"))
-	return err
+	// Write the response
+	if _, err = writer.Write(respBody); err != nil {
+		return fmt.Errorf("error writing response: %w", err)
+	}
+
+	// Add a newline
+	if _, err = writer.Write([]byte("\n")); err != nil {
+		return fmt.Errorf("error writing newline: %w", err)
+	}
+
+	return nil
 }
 
 // writeResponse marshals and writes a JSON-RPC response message followed by a newline.
@@ -448,12 +566,15 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 func (s *StdioServer) writeResponse(response interface{}, writer io.Writer) error {
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
-		return err
+		return fmt.Errorf("error marshaling response: %w", err)
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// Write response followed by newline
 	if _, err := fmt.Fprintf(writer, "%s\n", responseBytes); err != nil {
-		return err
+		return fmt.Errorf("error writing response: %w", err)
 	}
 
 	return nil
@@ -473,11 +594,19 @@ func ServeStdio(server *rest.MCPServer, opts ...StdioOption) error {
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
 	go func() {
-		<-sigChan
-		s.errLogger.Println("Received shutdown signal, stopping server...")
+		sig := <-sigChan
+		s.errLogger.Printf("Received shutdown signal %v, stopping server...", sig)
 		cancel()
 	}()
 
 	s.errLogger.Println("Starting MCP server in stdio mode")
-	return s.Listen(ctx, os.Stdin, os.Stdout)
+
+	err := s.Listen(ctx, os.Stdin, os.Stdout)
+	if err != nil && err != context.Canceled {
+		s.errLogger.Printf("Server exited with error: %v", err)
+		return err
+	}
+
+	s.errLogger.Println("Server shutdown complete")
+	return nil
 }
