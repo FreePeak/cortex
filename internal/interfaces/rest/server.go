@@ -382,10 +382,10 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request JSONRPCRequest
 		return createErrorResponse(request.ID, -32602, "Missing or invalid 'name' parameter")
 	}
 
-	// Get tool parameters
-	toolParams, ok := params["parameters"].(map[string]interface{})
+	// Get tool parameters - check for 'arguments' field instead of 'parameters'
+	toolParams, ok := params["arguments"].(map[string]interface{})
 	if !ok {
-		log.Printf("Invalid or missing 'parameters' field")
+		log.Printf("Invalid or missing 'arguments' field")
 		toolParams = map[string]interface{}{}
 	}
 
@@ -414,9 +414,14 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request JSONRPCRequest
 			return createErrorResponse(request.ID, -32602, "Missing or invalid 'message' parameter")
 		}
 
-		// Echo the message back
+		// Echo the message back with content as an array of objects
 		result = map[string]interface{}{
-			"message": message,
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": message,
+				},
+			},
 		}
 
 	default:
@@ -424,13 +429,8 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request JSONRPCRequest
 		return createErrorResponse(request.ID, -32603, fmt.Sprintf("Tool handler not implemented for: %s", toolName))
 	}
 
-	// Return response
-	resp := map[string]interface{}{
-		"result": result,
-	}
-
 	log.Printf("Processed tools/call response for tool '%s'", toolName)
-	return createResponse(request.ID, resp)
+	return createResponse(request.ID, result)
 }
 
 func (s *MCPServer) processPromptsList(ctx context.Context, request JSONRPCRequest) interface{} {
