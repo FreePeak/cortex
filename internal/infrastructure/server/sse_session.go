@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
@@ -17,6 +19,7 @@ type sseSession2 struct {
 	done       chan struct{}
 	eventQueue chan string // Channel for queuing events
 	id         string
+	notifChan  NotificationChannel
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
@@ -41,6 +44,7 @@ func NewSSESession(w http.ResponseWriter, userAgent string, bufferSize int) (dom
 		done:       make(chan struct{}),
 		eventQueue: make(chan string, bufferSize),
 		id:         sessionID,
+		notifChan:  make(NotificationChannel, bufferSize),
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -62,6 +66,7 @@ func (s *sseSession2) NotificationChannel() chan<- string {
 func (s *sseSession2) Close() {
 	s.cancel()
 	close(s.done)
+	close(s.notifChan)
 	// We intentionally don't close eventQueue here to avoid panic
 	// when writing to a closed channel. It will be garbage collected
 	// when the session object is no longer referenced.
@@ -77,10 +82,7 @@ func (s *sseSession2) Start() {
 	s.writer.Header().Set("Access-Control-Allow-Origin", "*")
 	s.flusher.Flush()
 
-	// Send an initial message
-	s.writer.Write([]byte("event: connected\ndata: {\"id\":\"" + s.id + "\"}\n\n"))
-	s.flusher.Flush()
-
+	// Main event loop - processing events from the eventQueue
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -93,6 +95,15 @@ func (s *sseSession2) Start() {
 			// Write the event directly to the response
 			s.writer.Write([]byte(event))
 			s.flusher.Flush()
+		case notification := <-s.notifChan:
+			// Handle notifications from the MCP server
+			// This is important to maintain compatibility with the original implementation
+			// Converting notification to SSE event format
+			event, err := json.Marshal(notification)
+			if err == nil {
+				s.writer.Write([]byte(fmt.Sprintf("event: message\ndata: %s\n\n", event)))
+				s.flusher.Flush()
+			}
 		}
 	}
 }

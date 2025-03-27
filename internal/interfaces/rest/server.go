@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
@@ -28,56 +27,12 @@ const (
 	defaultNotificationBufferSize = 100
 )
 
-// MCPMessageHandler implements domain.MessageHandler for JSON-RPC message processing
-type MCPMessageHandler struct {
-	service *usecases.ServerService
-}
-
-// HandleMessage processes a JSON-RPC message and returns a response.
-func (h *MCPMessageHandler) HandleMessage(ctx context.Context, rawMessage json.RawMessage) interface{} {
-	// Parse JSON-RPC request
-	var request domain.JSONRPCRequest
-	if err := json.Unmarshal(rawMessage, &request); err != nil {
-		return domain.CreateErrorResponse(jsonRPCVersion, nil, -32700, "Parse error")
-	}
-
-	// Validate JSON-RPC version
-	if request.JSONRPC != jsonRPCVersion {
-		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32600, "Invalid JSON-RPC version")
-	}
-
-	// Handle request based on method
-	switch request.Method {
-	case "initialize":
-		return h.processInitialize(ctx, request)
-	case "ping":
-		return h.processPing(ctx, request)
-	case "resources/list":
-		return h.processResourcesList(ctx, request)
-	case "resources/read":
-		return h.processResourcesRead(ctx, request)
-	case "tools/list":
-		return h.processToolsList(ctx, request)
-	case "tools/call":
-		return h.processToolsCall(ctx, request)
-	case "prompts/list":
-		return h.processPromptsList(ctx, request)
-	case "prompts/get":
-		return h.processPromptsGet(ctx, request)
-	default:
-		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32601, fmt.Sprintf("Method '%s' not found", request.Method))
-	}
-}
-
 // MCPServer represents the HTTP server for the MCP protocol.
 type MCPServer struct {
-	service     *usecases.ServerService
-	httpServer  *http.Server
-	sseClients  sync.Map
-	notifier    *server.NotificationSender
-	sseHandler  domain.SSEHandler
-	sessionRepo domain.SessionRepository
-	msgHandler  *MCPMessageHandler
+	service    *usecases.ServerService
+	httpServer *http.Server
+	sseServer  *server.SSEServer
+	notifier   *server.NotificationSender
 }
 
 // NewMCPServer creates a new MCP server.
@@ -89,16 +44,19 @@ func NewMCPServer(service *usecases.ServerService, addr string) *MCPServer {
 		notifier: notifier,
 	}
 
-	// Create message handler
-	s.msgHandler = &MCPMessageHandler{service: service}
-
-	// Create SSE Handler with message handler and configuration
-	sseHandlerConfig := server.SSEHandlerConfig{
-		BasePath:        "",
-		MessageEndpoint: "/message",
-		SSEEndpoint:     "/sse",
+	// Create message handler function for the SSE server
+	mcpHandler := func(ctx context.Context, rawMessage json.RawMessage) interface{} {
+		return s.processMessage(ctx, rawMessage)
 	}
-	s.sseHandler = server.NewSSEHandler(sseHandlerConfig, s.msgHandler, jsonRPCVersion)
+
+	// Create the original SSE Server with MCP message handler
+	sseServer := server.NewSSEServer(notifier, mcpHandler,
+		server.WithMessageEndpoint("/message"),
+		server.WithSSEEndpoint("/sse"),
+		server.WithBasePath(""),
+	)
+
+	s.sseServer = sseServer
 
 	// Create HTTP server
 	mux := http.NewServeMux()
@@ -108,9 +66,9 @@ func NewMCPServer(service *usecases.ServerService, addr string) *MCPServer {
 	mux.HandleFunc("/jsonrpc", s.handleJSONRPC) // Alternative endpoint for JSON-RPC
 	mux.HandleFunc("/events", s.redirectToSSE)  // Redirect to SSE endpoint
 
-	// Add SSE handler for SSE and message endpoints
-	mux.Handle("/sse", s.sseHandler)
-	mux.Handle("/message", s.sseHandler)
+	// Add SSE server handler - IMPORTANT: use the original SSE server
+	mux.Handle("/sse", sseServer)
+	mux.Handle("/message", sseServer)
 
 	// Add a simple status endpoint
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +127,7 @@ func (s *MCPServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Process the message
-	response := s.msgHandler.HandleMessage(ctx, body)
+	response := s.processMessage(ctx, body)
 
 	// Send response
 	w.Header().Set("Content-Type", "application/json")
@@ -178,7 +136,7 @@ func (s *MCPServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 // Helper methods for processing specific JSON-RPC methods
 
-func (h *MCPMessageHandler) processInitialize(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processInitialize(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	// Log initialization request
 	log.Printf("Processing initialize request")
 
@@ -186,7 +144,7 @@ func (h *MCPMessageHandler) processInitialize(ctx context.Context, request domai
 	// ...
 
 	// Get server info
-	name, version, instructions := h.service.ServerInfo()
+	name, version, instructions := s.service.ServerInfo()
 
 	log.Printf("Server info: %s %s", name, version)
 
@@ -220,19 +178,25 @@ func (h *MCPMessageHandler) processInitialize(ctx context.Context, request domai
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
-func (h *MCPMessageHandler) processPing(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processPing(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	// Simple ping response
 	log.Printf("Processing ping request")
 	return domain.CreateResponse(jsonRPCVersion, request.ID, struct{}{})
 }
 
-func (h *MCPMessageHandler) processResourcesList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processResourcesList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	log.Printf("Processing resources/list request")
-	resources, err := h.service.ListResources(ctx)
+
+	// Debug logging to verify service access
+	log.Printf("Service pointer: %p", s.service)
+
+	resources, err := s.service.ListResources(ctx)
 	if err != nil {
 		log.Printf("Error listing resources: %v", err)
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Internal error: %v", err))
 	}
+
+	log.Printf("Found %d resources in repository", len(resources))
 
 	// Convert domain resources to response format
 	resourceList := make([]map[string]interface{}, len(resources))
@@ -253,7 +217,7 @@ func (h *MCPMessageHandler) processResourcesList(ctx context.Context, request do
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
-func (h *MCPMessageHandler) processResourcesRead(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processResourcesRead(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	log.Printf("Processing resources/read request")
 
 	// Extract URI from parameters
@@ -272,7 +236,7 @@ func (h *MCPMessageHandler) processResourcesRead(ctx context.Context, request do
 	log.Printf("Reading resource with URI: %s", uri)
 
 	// Get resource
-	resource, err := h.service.GetResource(ctx, uri)
+	resource, err := s.service.GetResource(ctx, uri)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			log.Printf("Resource not found: %s", uri)
@@ -298,17 +262,25 @@ func (h *MCPMessageHandler) processResourcesRead(ctx context.Context, request do
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
-func (h *MCPMessageHandler) processToolsList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processToolsList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	log.Printf("Processing tools/list request")
-	tools, err := h.service.ListTools(ctx)
+
+	// Debug logging to verify service access
+	log.Printf("Service pointer: %p", s.service)
+
+	tools, err := s.service.ListTools(ctx)
 	if err != nil {
 		log.Printf("Error listing tools: %v", err)
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Internal error: %v", err))
 	}
 
+	log.Printf("Found %d tools in repository", len(tools))
+
 	// Convert domain tools to response format
 	toolList := make([]map[string]interface{}, len(tools))
 	for i, tool := range tools {
+		log.Printf("Tool %d: %s - %s", i, tool.Name, tool.Description)
+
 		// Format parameters as an object with properties
 		parametersObj := make(map[string]interface{})
 		parametersObj["type"] = "object"
@@ -349,7 +321,7 @@ func (h *MCPMessageHandler) processToolsList(ctx context.Context, request domain
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
-func (h *MCPMessageHandler) processToolsCall(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processToolsCall(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	log.Printf("Processing tools/call request: %+v", request)
 
 	// Extract parameters
@@ -376,7 +348,7 @@ func (h *MCPMessageHandler) processToolsCall(ctx context.Context, request domain
 	log.Printf("Tool call request for tool '%s' with params: %+v", toolName, toolParams)
 
 	// Get the tool
-	_, err := h.service.GetTool(ctx, toolName)
+	_, err := s.service.GetTool(ctx, toolName)
 	if err != nil {
 		log.Printf("Error getting tool '%s': %v", toolName, err)
 		if errors.Is(err, domain.ErrNotFound) {
@@ -434,9 +406,9 @@ func (h *MCPMessageHandler) processToolsCall(ctx context.Context, request domain
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
-func (h *MCPMessageHandler) processPromptsList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processPromptsList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	log.Printf("Processing prompts/list request")
-	prompts, err := h.service.ListPrompts(ctx)
+	prompts, err := s.service.ListPrompts(ctx)
 	if err != nil {
 		log.Printf("Error listing prompts: %v", err)
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Internal error: %v", err))
@@ -470,7 +442,7 @@ func (h *MCPMessageHandler) processPromptsList(ctx context.Context, request doma
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
-func (h *MCPMessageHandler) processPromptsGet(ctx context.Context, request domain.JSONRPCRequest) interface{} {
+func (s *MCPServer) processPromptsGet(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	log.Printf("Processing prompts/get request")
 	// TODO: Implement prompt get handler
 	return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, "Prompt get not implemented")
@@ -494,4 +466,40 @@ func (s *MCPServer) GetAddress() string {
 		return s.httpServer.Addr
 	}
 	return ""
+}
+
+// processMessage processes a JSON-RPC message and returns a response.
+func (s *MCPServer) processMessage(ctx context.Context, rawMessage json.RawMessage) interface{} {
+	// Parse JSON-RPC request
+	var request domain.JSONRPCRequest
+	if err := json.Unmarshal(rawMessage, &request); err != nil {
+		return domain.CreateErrorResponse(jsonRPCVersion, nil, -32700, "Parse error")
+	}
+
+	// Validate JSON-RPC version
+	if request.JSONRPC != jsonRPCVersion {
+		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32600, "Invalid JSON-RPC version")
+	}
+
+	// Handle request based on method
+	switch request.Method {
+	case "initialize":
+		return s.processInitialize(ctx, request)
+	case "ping":
+		return s.processPing(ctx, request)
+	case "resources/list":
+		return s.processResourcesList(ctx, request)
+	case "resources/read":
+		return s.processResourcesRead(ctx, request)
+	case "tools/list":
+		return s.processToolsList(ctx, request)
+	case "tools/call":
+		return s.processToolsCall(ctx, request)
+	case "prompts/list":
+		return s.processPromptsList(ctx, request)
+	case "prompts/get":
+		return s.processPromptsGet(ctx, request)
+	default:
+		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32601, fmt.Sprintf("Method '%s' not found", request.Method))
+	}
 }

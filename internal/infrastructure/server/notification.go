@@ -62,6 +62,15 @@ func NewNotificationSender(jsonrpcVersion string) *NotificationSender {
 	}
 }
 
+// NotificationRegistrar is an interface for registering and unregistering sessions.
+type NotificationRegistrar interface {
+	// RegisterSession registers a session for notifications.
+	RegisterSession(session *MCPSession)
+
+	// UnregisterSession unregisters a session.
+	UnregisterSession(sessionID string)
+}
+
 // RegisterSession registers a session for notifications.
 func (n *NotificationSender) RegisterSession(session *MCPSession) {
 	n.sessions.Store(session.ID(), session)

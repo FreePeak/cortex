@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/google/uuid"
 )
 
 // SSEHandlerConfig contains configuration options for the SSE handler.
@@ -27,6 +28,7 @@ type sseHandler struct {
 	messageHandler domain.MessageHandler
 	httpServer     *http.Server
 	jsonrpcVersion string
+	notifier       *NotificationSender
 }
 
 // NewSSEHandler creates a new SSE handler with the given configuration and dependencies.
@@ -34,6 +36,7 @@ func NewSSEHandler(
 	config SSEHandlerConfig,
 	messageHandler domain.MessageHandler,
 	jsonrpcVersion string,
+	notifier *NotificationSender,
 ) domain.SSEHandler {
 	// Set default endpoints if not provided
 	if config.MessageEndpoint == "" {
@@ -54,6 +57,7 @@ func NewSSEHandler(
 		connectionMgr:  NewSSEConnectionManager(),
 		messageHandler: messageHandler,
 		jsonrpcVersion: jsonrpcVersion,
+		notifier:       notifier,
 	}
 }
 
@@ -142,41 +146,107 @@ func (s *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CORS headers for SSE
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	// Check if the ResponseWriter supports flushing
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Get or generate a session ID
+	sessionID := r.URL.Query().Get("session")
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
 
 	// Get user agent for session tracking
 	userAgent := r.UserAgent()
 
-	// Create a new session
-	session, err := NewSSESession(w, userAgent, 100) // Buffer size of 100
-	if err != nil {
-		http.Error(w, "SSE not supported", http.StatusInternalServerError)
-		return
+	// Create a context that cancels when the client disconnects
+	// This is important for the original connection flow
+	sessionCtx, sessionCancel := context.WithCancel(r.Context())
+
+	// Create the event queue and notification channel
+	eventQueue := make(chan string, 100)
+	notifChan := make(NotificationChannel, 100)
+
+	// Create a new session for the SSE connection
+	session := &sseSession2{
+		writer:     w,
+		flusher:    flusher,
+		done:       make(chan struct{}),
+		eventQueue: eventQueue,
+		id:         sessionID,
+		notifChan:  notifChan,
+		ctx:        sessionCtx,
+		cancel:     sessionCancel,
 	}
 
 	// Add session to connection manager
 	s.connectionMgr.AddSession(session)
+	defer s.connectionMgr.RemoveSession(session.ID())
 
-	// Start processing events (in the current goroutine)
-	// This will block until the client disconnects
-	go func() {
-		// Remove the session when done
-		defer s.connectionMgr.RemoveSession(session.ID())
-		session.Start()
-	}()
+	// Register the session with the notification sender
+	if s.notifier != nil {
+		mcpSession := &MCPSession{
+			id:        sessionID,
+			userAgent: userAgent,
+			notifChan: notifChan,
+		}
+		s.notifier.RegisterSession(mcpSession)
+		defer s.notifier.UnregisterSession(sessionID)
+	}
 
-	// Block until the client disconnects or context is canceled
-	<-session.Context().Done()
+	// Create the message endpoint URL with session ID
+	messageEndpoint := fmt.Sprintf("%s?sessionId=%s", s.completeMessagePath(), sessionID)
+
+	// Send the initial connected event - IMPORTANT: this exact format is required
+	fmt.Fprintf(w, "event: connected\ndata: {\"sessionId\": \"%s\"}\n\n", sessionID)
+	flusher.Flush()
+
+	// Send the endpoint event - IMPORTANT: this exact format is required
+	fmt.Fprintf(w, "event: endpoint\ndata: \"%s\"\n\n", messageEndpoint)
+	flusher.Flush()
+
+	// Process events in the main goroutine
+	// This matches the original SSE server's connection handling
+	for {
+		select {
+		case event := <-eventQueue:
+			// Write the event to the response
+			fmt.Fprint(w, event)
+			flusher.Flush()
+		case notification := <-notifChan:
+			// Convert notification to SSE event format
+			eventData, err := json.Marshal(notification)
+			if err == nil {
+				fmt.Fprintf(w, "event: message\ndata: %s\n\n", eventData)
+				flusher.Flush()
+			}
+		case <-r.Context().Done():
+			// Request context done (client disconnected)
+			sessionCancel()
+			close(session.done)
+			return
+		case <-sessionCtx.Done():
+			// Session context done
+			close(session.done)
+			return
+		}
+	}
 }
 
 // handleMessage processes a JSON-RPC message request.
 func (s *sseHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 	// Only accept POST requests for messages
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeJSONRPCError(w, nil, -32600, "Method not allowed", s.jsonrpcVersion)
 		return
 	}
 
@@ -191,6 +261,20 @@ func (s *sseHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract sessionId from query parameters - this is critical
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
+		writeJSONRPCError(w, nil, -32602, "Missing sessionId parameter", s.jsonrpcVersion)
+		return
+	}
+
+	// Verify session exists
+	session, ok := s.connectionMgr.GetSession(sessionID)
+	if !ok {
+		writeJSONRPCError(w, nil, -32602, "Invalid session ID", s.jsonrpcVersion)
+		return
+	}
+
 	// Read request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -201,12 +285,62 @@ func (s *sseHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 	// Create a context with values from the request
 	ctx := r.Context()
 
-	// Call the message handler to process the message
+	// Parse JSON-RPC request for logging and ID extraction
+	var jsonRPCRequest map[string]interface{}
+	if err := json.Unmarshal(body, &jsonRPCRequest); err == nil {
+		// Log tool list requests
+		if method, ok := jsonRPCRequest["method"].(string); ok && method == "tools/list" {
+			log.Printf("Session %s requested tools/list", sessionID)
+		}
+	}
+
+	// Process the message
 	response := s.messageHandler.HandleMessage(ctx, body)
 
-	// Send the response
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	// Only proceed if we have a response
+	if response != nil {
+		responseBytes, err := json.Marshal(response)
+		if err != nil {
+			writeJSONRPCError(w, nil, -32603, "Error marshalling response", s.jsonrpcVersion)
+			return
+		}
+
+		// Get the request ID to determine if it's a request or notification
+		id, hasID := jsonRPCRequest["id"]
+
+		if hasID && id != nil {
+			// It's a request (has an ID) - send both via SSE and HTTP
+
+			// Send via SSE channel first
+			select {
+			case session.NotificationChannel() <- fmt.Sprintf("event: message\ndata: %s\n\n", responseBytes):
+				// Event sent successfully
+			default:
+				log.Printf("Warning: Could not queue SSE event for session %s", sessionID)
+			}
+
+			// Also send HTTP response
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(responseBytes)
+		} else {
+			// It's a notification (no ID) - just send 202 Accepted
+			w.WriteHeader(http.StatusAccepted)
+		}
+	} else {
+		// No response (empty result)
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// Helper function to get the request ID from a JSON-RPC request
+func getRequestID(request map[string]interface{}) (interface{}, bool) {
+	if request == nil {
+		return nil, false
+	}
+
+	id, hasID := request["id"]
+	return id, hasID
 }
 
 // Helper methods for path handling
