@@ -1,5 +1,8 @@
-# Golang MCP Server SDK ![Go Reference](https://pkg.go.dev/badge/github.com/FreePeak/golang-mcp-server-sdk.svg) ![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)
-
+# Golang MCP Server SDK 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Go Report Card](https://goreportcard.com/badge/github.com/FreePeak/golang-mcp-server-sdk)](https://goreportcard.com/report/github.com/FreePeak/golang-mcp-server-sdk)
+[![Go Reference](https://pkg.go.dev/badge/github.com/FreePeak/golang-mcp-server-sdk.svg)](https://pkg.go.dev/github.com/FreePeak/golang-mcp-server-sdk)
+[![Contributors](https://img.shields.io/github/contributors/FreePeak/golang-mcp-server-sdk)](https://github.com/FreePeak/golang-mcp-server-sdk/graphs/contributors)
 ## Table of Contents
 - [Overview](#overview)
 - [Installation](#installation)
@@ -118,9 +121,9 @@ The MCP Server is your core interface to the MCP protocol. It handles connection
 
 ```go
 serviceConfig := usecases.ServerConfig{
-    Name:     "My App",
-    Version:  "1.0.0",
-    ToolRepo: toolRepo,
+	Name:     "My App",
+	Version:  "1.0.0",
+	ToolRepo: toolRepo,
 }
 service := usecases.NewServerService(serviceConfig)
 ```
@@ -135,10 +138,10 @@ resourceRepo := server.NewInMemoryResourceRepository()
 
 // Add a static resource
 resource := &domain.Resource{
-    Name:        "config",
-    Description: "Application configuration",
-    Uri:         "config://app",
-    Content:     "App configuration data goes here",
+	Name:        "config",
+	Description: "Application configuration",
+	Uri:         "config://app",
+	Content:     "App configuration data goes here",
 }
 resourceRepo.AddResource(ctx, resource)
 
@@ -153,51 +156,51 @@ Tools let LLMs take actions through your server. Unlike resources, tools are exp
 ```go
 // Define a simple calculator tool
 calculatorTool := &domain.Tool{
-    Name:        "calculate",
-    Description: "Performs basic arithmetic",
-    Parameters: []domain.ToolParameter{
-        {
-            Name:        "operation",
-            Description: "The operation to perform (add, subtract, multiply, divide)",
-            Type:        "string",
-            Required:    true,
-        },
-        {
-            Name:        "a",
-            Description: "First number",
-            Type:        "number",
-            Required:    true,
-        },
-        {
-            Name:        "b",
-            Description: "Second number",
-            Type:        "number",
-            Required:    true,
-        },
-    },
+	Name:        "calculate",
+	Description: "Performs basic arithmetic",
+	Parameters: []domain.ToolParameter{
+		{
+			Name:        "operation",
+			Description: "The operation to perform (add, subtract, multiply, divide)",
+			Type:        "string",
+			Required:    true,
+		},
+		{
+			Name:        "a",
+			Description: "First number",
+			Type:        "number",
+			Required:    true,
+		},
+		{
+			Name:        "b",
+			Description: "Second number",
+			Type:        "number",
+			Required:    true,
+		},
+	},
 }
 
 // Add tool implementation
 service.RegisterToolHandler("calculate", func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-    operation := params["operation"].(string)
-    a := params["a"].(float64)
-    b := params["b"].(float64)
-    
-    var result float64
-    switch operation {
-    case "add":
-        result = a + b
-    case "subtract":
-        result = a - b
-    case "multiply":
-        result = a * b
-    case "divide":
-        result = a / b
-    default:
-        return nil, fmt.Errorf("unknown operation: %s", operation)
-    }
-    
-    return result, nil
+	operation := params["operation"].(string)
+	a := params["a"].(float64)
+	b := params["b"].(float64)
+	
+	var result float64
+	switch operation {
+	case "add":
+		result = a + b
+	case "subtract":
+		result = a - b
+	case "multiply":
+		result = a * b
+	case "divide":
+		result = a / b
+	default:
+		return nil, fmt.Errorf("unknown operation: %s", operation)
+	}
+	
+	return result, nil
 })
 ```
 
@@ -211,17 +214,17 @@ promptRepo := server.NewInMemoryPromptRepository()
 
 // Add a code review prompt
 codeReviewPrompt := &domain.Prompt{
-    Name:        "review-code",
-    Description: "A prompt for code review",
-    Template:    "Please review this code:\n\n{{.code}}",
-    Parameters: []domain.PromptParameter{
-        {
-            Name:        "code",
-            Description: "The code to review",
-            Type:        "string",
-            Required:    true,
-        },
-    },
+	Name:        "review-code",
+	Description: "A prompt for code review",
+	Template:    "Please review this code:\n\n{{.code}}",
+	Parameters: []domain.PromptParameter{
+		{
+			Name:        "code",
+			Description: "The code to review",
+			Type:        "string",
+			Required:    true,
+		},
+	},
 }
 promptRepo.AddPrompt(ctx, codeReviewPrompt)
 
@@ -239,7 +242,7 @@ For command-line tools and direct integrations:
 
 ```go
 import (
-    "github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
 )
 
 // Create stdio server
@@ -247,7 +250,7 @@ stdioServer := stdio.NewStdioServer(service, logger)
 
 // Start the stdio server
 if err := stdioServer.Serve(); err != nil {
-    logger.Fatalf("Error serving: %v", err)
+	logger.Fatalf("Error serving: %v", err)
 }
 ```
 
@@ -257,7 +260,7 @@ For remote servers, start a web server with a Server-Sent Events (SSE) endpoint:
 
 ```go
 import (
-    "github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
 )
 
 // Create HTTP server with SSE support
@@ -265,7 +268,7 @@ httpServer := rest.NewMCPServer(service, ":8080")
 
 // Start the HTTP server
 if err := httpServer.Serve(); err != nil {
-    logger.Fatalf("Error serving: %v", err)
+	logger.Fatalf("Error serving: %v", err)
 }
 ```
 
@@ -275,7 +278,7 @@ For bidirectional communication:
 
 ```go
 import (
-    "github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/ws"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/ws"
 )
 
 // Create WebSocket server
@@ -283,7 +286,7 @@ wsServer := ws.NewWebSocketServer(service, ":8081")
 
 // Start the WebSocket server
 if err := wsServer.Serve(); err != nil {
-    logger.Fatalf("Error serving: %v", err)
+	logger.Fatalf("Error serving: %v", err)
 }
 ```
 
@@ -293,7 +296,7 @@ You can also run multiple protocol servers simultaneously:
 
 ```go
 import (
-    "github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
 )
 
 // Create a multi-protocol server builder
@@ -307,12 +310,12 @@ serverBuilder.WithWebSocket(":8081")
 // Build and run the server
 multiServer, err := serverBuilder.Build()
 if err != nil {
-    logger.Fatalf("Error building server: %v", err)
+	logger.Fatalf("Error building server: %v", err)
 }
 
 // Start all servers
 if err := multiServer.Serve(); err != nil {
-    logger.Fatalf("Error serving: %v", err)
+	logger.Fatalf("Error serving: %v", err)
 }
 ```
 
