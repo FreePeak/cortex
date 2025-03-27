@@ -21,6 +21,8 @@ type sseSession struct {
 	eventQueue chan string // Channel for queuing events
 	id         string
 	notifChan  NotificationChannel
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // SessionID returns the session ID.
@@ -33,8 +35,9 @@ func (s *sseSession) NotificationChannel() NotificationChannel {
 	return s.notifChan
 }
 
-// Close closes the notification channel.
+// Close closes the notification channel and cancels the context.
 func (s *sseSession) Close() {
+	s.cancel()
 	close(s.notifChan)
 	close(s.done)
 }
@@ -44,6 +47,85 @@ func (s *sseSession) Close() {
 // content. This can be used to inject context values from headers, for example.
 type SSEContextFunc func(ctx context.Context, r *http.Request) context.Context
 
+// ConnectionPool manages active SSE sessions.
+type ConnectionPool struct {
+	mu       sync.RWMutex
+	sessions map[string]*sseSession
+}
+
+// NewConnectionPool creates a new connection pool.
+func NewConnectionPool() *ConnectionPool {
+	return &ConnectionPool{
+		sessions: make(map[string]*sseSession),
+	}
+}
+
+// Add adds a session to the pool.
+func (p *ConnectionPool) Add(session *sseSession) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sessions[session.id] = session
+}
+
+// Remove removes a session from the pool.
+func (p *ConnectionPool) Remove(sessionID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.sessions, sessionID)
+}
+
+// Get returns a session by ID.
+func (p *ConnectionPool) Get(sessionID string) (*sseSession, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	session, ok := p.sessions[sessionID]
+	return session, ok
+}
+
+// Broadcast sends an event to all active sessions.
+func (p *ConnectionPool) Broadcast(event interface{}) {
+	eventData, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+
+	eventStr := fmt.Sprintf("event: message\ndata: %s\n\n", eventData)
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	for _, session := range p.sessions {
+		select {
+		case session.eventQueue <- eventStr:
+			// Event queued successfully
+		case <-session.done:
+			// Session is closed
+		default:
+			// Queue is full
+		}
+	}
+}
+
+// CloseAll closes all active sessions.
+func (p *ConnectionPool) CloseAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, session := range p.sessions {
+		session.Close()
+	}
+
+	// Clear the map
+	p.sessions = make(map[string]*sseSession)
+}
+
+// Count returns the number of active sessions.
+func (p *ConnectionPool) Count() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.sessions)
+}
+
 // SSEServer implements a Server-Sent Events (SSE) based server.
 // It provides real-time communication capabilities over HTTP using the SSE protocol.
 type SSEServer struct {
@@ -52,10 +134,12 @@ type SSEServer struct {
 	basePath        string
 	messageEndpoint string
 	sseEndpoint     string
-	sessions        sync.Map
+	connectionPool  *ConnectionPool
 	srv             *http.Server
 	contextFunc     SSEContextFunc
 	mcpHandler      func(ctx context.Context, rawMessage json.RawMessage) interface{}
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 // SSEOption defines a function type for configuring SSEServer
@@ -116,7 +200,7 @@ func WithHTTPServer(srv *http.Server) SSEOption {
 	}
 }
 
-// WithContextFunc sets a function that will be called to customize the context
+// WithSSEContextFunc sets a function that will be called to customize the context
 // to the server using the incoming request.
 func WithSSEContextFunc(fn SSEContextFunc) SSEOption {
 	return func(s *SSEServer) {
@@ -126,11 +210,16 @@ func WithSSEContextFunc(fn SSEContextFunc) SSEOption {
 
 // NewSSEServer creates a new SSE server instance with the given notification sender and options.
 func NewSSEServer(notifier *NotificationSender, mcpHandler func(ctx context.Context, rawMessage json.RawMessage) interface{}, opts ...SSEOption) *SSEServer {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	s := &SSEServer{
 		notifier:        notifier,
 		sseEndpoint:     "/sse",
 		messageEndpoint: "/message",
 		mcpHandler:      mcpHandler,
+		connectionPool:  NewConnectionPool(),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 
 	// Apply all options
@@ -167,15 +256,13 @@ func (s *SSEServer) Start(addr string) error {
 // Shutdown gracefully stops the SSE server, closing all active sessions
 // and shutting down the HTTP server.
 func (s *SSEServer) Shutdown(ctx context.Context) error {
-	if s.srv != nil {
-		s.sessions.Range(func(key, value interface{}) bool {
-			if session, ok := value.(*sseSession); ok {
-				close(session.done)
-			}
-			s.sessions.Delete(key)
-			return true
-		})
+	// Cancel the server context first to stop accepting new connections
+	s.cancel()
 
+	// Close all active sessions
+	s.connectionPool.CloseAll()
+
+	if s.srv != nil {
 		return s.srv.Shutdown(ctx)
 	}
 	return nil
@@ -205,6 +292,10 @@ func (s *SSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 		sessionID = uuid.New().String()
 	}
 
+	// Create a context for this session that is a child of the server context
+	// and can be canceled when the session ends
+	sessionCtx, sessionCancel := context.WithCancel(s.ctx)
+
 	session := &sseSession{
 		writer:     w,
 		flusher:    flusher,
@@ -212,10 +303,13 @@ func (s *SSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 		eventQueue: make(chan string, 100), // Buffer for events
 		id:         sessionID,
 		notifChan:  make(NotificationChannel, 100),
+		ctx:        sessionCtx,
+		cancel:     sessionCancel,
 	}
 
-	s.sessions.Store(sessionID, session)
-	defer s.sessions.Delete(sessionID)
+	// Add the session to the connection pool
+	s.connectionPool.Add(session)
+	defer s.connectionPool.Remove(sessionID)
 
 	s.notifier.RegisterSession(&MCPSession{
 		id:        sessionID,
@@ -236,9 +330,13 @@ func (s *SSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 						// Event queued successfully
 					case <-session.done:
 						return
+					case <-session.ctx.Done():
+						return
 					}
 				}
 			case <-session.done:
+				return
+			case <-session.ctx.Done():
 				return
 			case <-r.Context().Done():
 				return
@@ -264,6 +362,10 @@ func (s *SSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, event)
 			flusher.Flush()
 		case <-r.Context().Done():
+			sessionCancel()
+			close(session.done)
+			return
+		case <-session.ctx.Done():
 			close(session.done)
 			return
 		}
@@ -284,12 +386,11 @@ func (s *SSEServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionI, ok := s.sessions.Load(sessionID)
+	session, ok := s.connectionPool.Get(sessionID)
 	if !ok {
 		s.writeJSONRPCError(w, nil, -32602, "Invalid session ID")
 		return
 	}
-	session := sessionI.(*sseSession)
 
 	// Create context for the message handler
 	ctx := r.Context()
@@ -317,6 +418,8 @@ func (s *SSEServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 			// Event queued successfully
 		case <-session.done:
 			// Session is closed, don't try to queue
+		case <-session.ctx.Done():
+			// Session context was canceled
 		default:
 			// Queue is full, could log this
 		}
@@ -357,11 +460,10 @@ func (s *SSEServer) SendEventToSession(
 	sessionID string,
 	event interface{},
 ) error {
-	sessionI, ok := s.sessions.Load(sessionID)
+	session, ok := s.connectionPool.Get(sessionID)
 	if !ok {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
-	session := sessionI.(*sseSession)
 
 	eventData, err := json.Marshal(event)
 	if err != nil {
@@ -374,9 +476,16 @@ func (s *SSEServer) SendEventToSession(
 		return nil
 	case <-session.done:
 		return fmt.Errorf("session closed")
+	case <-session.ctx.Done():
+		return fmt.Errorf("session context canceled")
 	default:
 		return fmt.Errorf("event queue full")
 	}
+}
+
+// BroadcastEvent sends an event to all active SSE sessions.
+func (s *SSEServer) BroadcastEvent(event interface{}) {
+	s.connectionPool.Broadcast(event)
 }
 
 func (s *SSEServer) GetUrlPath(input string) (string, error) {
