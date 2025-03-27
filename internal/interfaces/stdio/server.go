@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
@@ -34,6 +35,7 @@ type StdioServer struct {
 	errLogger   *log.Logger
 	contextFunc StdioContextFunc
 	mu          sync.Mutex
+	writerMu    sync.Mutex // separate mutex for writer operations
 }
 
 // StdioOption defines a function type for configuring StdioServer
@@ -82,6 +84,7 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 
 	reader := bufio.NewReader(stdin)
 
+	// Process messages serially to avoid concurrent writes to stdout
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,13 +101,17 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 				return err
 			}
 
-			// Process the message in a separate goroutine
-			// to avoid blocking the main loop
-			go func(line string) {
-				if err := s.processMessage(ctx, line, stdout); err != nil && err != io.EOF {
-					s.errLogger.Printf("Error processing message: %v", err)
+			// Process each message serially to avoid race conditions
+			if err := s.processMessage(ctx, line, stdout); err != nil {
+				if err == io.EOF {
+					s.errLogger.Println("Connection closed")
+					return nil
+				}
 
-					// Try to send an error response
+				s.errLogger.Printf("Error processing message: %v", err)
+
+				// For transient errors, try to send an error response and continue
+				if !isTerminalError(err) {
 					errorResp := rest.JSONRPCResponse{
 						JSONRPC: "2.0",
 						ID:      nil, // We don't know the ID here
@@ -113,13 +120,25 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 							Message: fmt.Sprintf("Internal error: %v", err),
 						},
 					}
-					if writeErr := s.writeResponse(errorResp, stdout); writeErr != nil {
-						s.errLogger.Printf("Failed to write error response: %v", writeErr)
-					}
+					_ = s.writeResponse(errorResp, stdout)
+					// Continue processing next messages
+					continue
 				}
-			}(line)
+
+				// For terminal errors, return and let the server shut down
+				return err
+			}
 		}
 	}
+}
+
+// isTerminalError determines if an error should cause the server to shut down
+func isTerminalError(err error) bool {
+	errStr := err.Error()
+	return strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "connection closed") ||
+		strings.Contains(errStr, "use of closed network connection")
 }
 
 // processMessage handles a single JSON-RPC message and writes the response.
@@ -134,6 +153,10 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 	if line == "" {
 		return nil // Skip empty lines
 	}
+
+	// Use a timeout context for message processing
+	msgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	// Parse the message as raw JSON
 	var rawMessage json.RawMessage
@@ -180,7 +203,7 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 
 	// Create a dummy HTTP request and response for the server's HTTP handler
 	w := httptest.NewRecorder()
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "/jsonrpc", strings.NewReader(string(rawMessage)))
+	r, err := http.NewRequestWithContext(msgCtx, http.MethodPost, "/jsonrpc", strings.NewReader(string(rawMessage)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -418,22 +441,42 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 				return
 			}
 
-			// Handle all echo-related tools
+			// Safe handling for different echo tool variants
 			if strings.Contains(strings.ToLower(toolName), "echo") {
 				// This is an echo tool
 				message, ok := toolParams["message"].(string)
-				if !ok || message == "" {
-					resp := rest.JSONRPCResponse{
-						JSONRPC: "2.0",
-						ID:      req.ID,
-						Error: &rest.JSONRPCError{
-							Code:    -32602,
-							Message: "Missing or invalid 'message' parameter",
-						},
+				if !ok {
+					// Handle non-string message parameter
+					messageVal, exists := toolParams["message"]
+					if !exists || messageVal == nil {
+						resp := rest.JSONRPCResponse{
+							JSONRPC: "2.0",
+							ID:      req.ID,
+							Error: &rest.JSONRPCError{
+								Code:    -32602,
+								Message: "Missing 'message' parameter",
+							},
+						}
+						w.Header().Set("Content-Type", "application/json")
+						json.NewEncoder(w).Encode(resp)
+						return
 					}
-					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(resp)
-					return
+
+					// Try to convert to string
+					switch v := messageVal.(type) {
+					case string:
+						message = v
+					case float64, int, int64, float32:
+						message = fmt.Sprintf("%v", v)
+					default:
+						// Try JSON conversion for complex types
+						jsonBytes, err := json.Marshal(v)
+						if err != nil {
+							message = fmt.Sprintf("%v", v)
+						} else {
+							message = string(jsonBytes)
+						}
+					}
 				}
 
 				// Return the echoed message
@@ -450,7 +493,9 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 					},
 				}
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(resp)
+				if err := json.NewEncoder(w).Encode(resp); err != nil {
+					s.errLogger.Printf("Error encoding echo response: %v", err)
+				}
 				return
 			}
 
@@ -527,6 +572,9 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 		}
 		respBody, _ = json.Marshal(errorResp)
 	} else {
+		// Ensure JSONRPC field is set correctly
+		responseObj["jsonrpc"] = "2.0"
+
 		// Ensure ID is properly set
 		if id, exists := responseObj["id"]; exists && id == nil {
 			if baseMessage.ID != nil {
@@ -534,31 +582,46 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 			} else {
 				responseObj["id"] = ""
 			}
-			respBody, _ = json.Marshal(responseObj)
 		}
 
-		// Ensure there's either a result or an error
-		_, hasResult := responseObj["result"]
-		_, hasError := responseObj["error"]
+		// Ensure there's either a result or an error, but not both
+		result, hasResult := responseObj["result"]
+		errorVal, hasError := responseObj["error"]
 
 		if !hasResult && !hasError {
 			// Neither result nor error - add an empty result
 			responseObj["result"] = map[string]interface{}{}
-			respBody, _ = json.Marshal(responseObj)
+			hasResult = true
+		} else if hasResult && hasError && errorVal != nil {
+			// Both result and error - prioritize error
+			delete(responseObj, "result")
+			hasResult = false
+		} else if hasResult && result == nil {
+			// Nil result - replace with empty object
+			responseObj["result"] = map[string]interface{}{}
 		}
+
+		respBody, _ = json.Marshal(responseObj)
 	}
 
-	// Write the response
-	if _, err = writer.Write(respBody); err != nil {
+	// Write the response with proper locking
+	if _, err = s.safeWrite(writer, respBody); err != nil {
 		return fmt.Errorf("error writing response: %w", err)
 	}
 
 	// Add a newline
-	if _, err = writer.Write([]byte("\n")); err != nil {
+	if _, err = s.safeWrite(writer, []byte("\n")); err != nil {
 		return fmt.Errorf("error writing newline: %w", err)
 	}
 
 	return nil
+}
+
+// safeWrite writes data to the writer with proper locking
+func (s *StdioServer) safeWrite(writer io.Writer, data []byte) (int, error) {
+	s.writerMu.Lock()
+	defer s.writerMu.Unlock()
+	return writer.Write(data)
 }
 
 // writeResponse marshals and writes a JSON-RPC response message followed by a newline.
@@ -569,12 +632,14 @@ func (s *StdioServer) writeResponse(response interface{}, writer io.Writer) erro
 		return fmt.Errorf("error marshaling response: %w", err)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	n, err := s.safeWrite(writer, responseBytes)
+	if err != nil {
+		return fmt.Errorf("error writing response (%d bytes): %w", n, err)
+	}
 
-	// Write response followed by newline
-	if _, err := fmt.Fprintf(writer, "%s\n", responseBytes); err != nil {
-		return fmt.Errorf("error writing response: %w", err)
+	n, err = s.safeWrite(writer, []byte("\n"))
+	if err != nil {
+		return fmt.Errorf("error writing newline: %w", err)
 	}
 
 	return nil
