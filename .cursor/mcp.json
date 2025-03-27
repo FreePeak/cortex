@@ -1,6 +1,9 @@
 {
     "mcpServers": {
-        "golang-mcp-server-ws": {
+        "golang-mcp-server-sse": {
+            "url": "http://localhost:8080/sse"
+        },
+        "golang-mcp-server-stdio": {
             "command": "/home/linhdmn/work/harvey/dev/FreePeak/Opensource/golang-mcp-server-sdk/bin/echo-stdio-server",
             "args": [">", "/home/linhdmn/work/harvey/dev/FreePeak/Opensource/golang-mcp-server-sdk/run.log"]
         }

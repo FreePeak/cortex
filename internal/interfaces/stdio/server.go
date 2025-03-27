@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -43,8 +42,6 @@ type StdioServer struct {
 	server      *rest.MCPServer
 	errLogger   *log.Logger
 	contextFunc StdioContextFunc
-	mu          sync.Mutex
-	writerMu    sync.Mutex // separate mutex for writer operations
 	processor   *MessageProcessor
 }
 
@@ -160,9 +157,6 @@ func (s *StdioServer) writeResponse(response interface{}, writer io.Writer) erro
 		return fmt.Errorf("error marshaling response: %w", err)
 	}
 
-	s.writerMu.Lock()
-	defer s.writerMu.Unlock()
-
 	// Write response
 	n, err := writer.Write(responseBytes)
 	if err != nil {
@@ -170,7 +164,7 @@ func (s *StdioServer) writeResponse(response interface{}, writer io.Writer) erro
 	}
 
 	// Add a newline
-	n, err = writer.Write([]byte("\n"))
+	_, err = writer.Write([]byte("\n"))
 	if err != nil {
 		return fmt.Errorf("error writing newline: %w", err)
 	}
@@ -218,14 +212,14 @@ type MessageProcessor struct {
 
 // MethodHandler defines the interface for JSON-RPC method handlers
 type MethodHandler interface {
-	Handle(ctx context.Context, params interface{}, id interface{}) (interface{}, *rest.JSONRPCError)
+	Handle(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError)
 }
 
 // MethodHandlerFunc is a function type that implements MethodHandler
-type MethodHandlerFunc func(ctx context.Context, params interface{}, id interface{}) (interface{}, *rest.JSONRPCError)
+type MethodHandlerFunc func(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError)
 
 // Handle calls the handler function
-func (f MethodHandlerFunc) Handle(ctx context.Context, params interface{}, id interface{}) (interface{}, *rest.JSONRPCError) {
+func (f MethodHandlerFunc) Handle(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError) {
 	return f(ctx, params, id)
 }
 
@@ -313,7 +307,7 @@ func (p *MessageProcessor) Process(ctx context.Context, message string) (interfa
 
 // Method handlers
 
-func (p *MessageProcessor) handleInitialize(ctx context.Context, params interface{}, id interface{}) (interface{}, *rest.JSONRPCError) {
+func (p *MessageProcessor) handleInitialize(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError) {
 	name, version, instructions := p.server.GetServerInfo()
 	result := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
@@ -342,15 +336,15 @@ func (p *MessageProcessor) handleInitialize(ctx context.Context, params interfac
 	return result, nil
 }
 
-func (p *MessageProcessor) handlePing(ctx context.Context, params interface{}, id interface{}) (interface{}, *rest.JSONRPCError) {
+func (p *MessageProcessor) handlePing(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError) {
 	return struct{}{}, nil
 }
 
-func (p *MessageProcessor) handleToolsList(ctx context.Context, params interface{}, id interface{}) (interface{}, *rest.JSONRPCError) {
+func (p *MessageProcessor) handleToolsList(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError) {
 	// Access the service through the server to get tools
 	tools, err := p.server.GetService().ListTools(ctx)
 	if err != nil {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    InternalErrorCode,
 			Message: fmt.Sprintf("Internal error: %v", err),
 		}
@@ -396,11 +390,11 @@ func (p *MessageProcessor) handleToolsList(ctx context.Context, params interface
 	}, nil
 }
 
-func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface{}, id interface{}) (interface{}, *rest.JSONRPCError) {
+func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError) {
 	// Extract parameters
 	paramsMap, ok := params.(map[string]interface{})
 	if !ok {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    InvalidParamsCode,
 			Message: "Invalid params",
 		}
@@ -409,7 +403,7 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 	// Get tool name
 	toolName, ok := paramsMap["name"].(string)
 	if !ok || toolName == "" {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    InvalidParamsCode,
 			Message: "Missing or invalid 'name' parameter",
 		}
@@ -428,7 +422,7 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 	// Get available tools from the service
 	tools, err := p.server.GetService().ListTools(ctx)
 	if err != nil {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    InternalErrorCode,
 			Message: fmt.Sprintf("Internal error: %v", err),
 		}
@@ -447,7 +441,7 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 	}
 
 	if !toolFound {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    MethodNotFoundCode,
 			Message: fmt.Sprintf("Tool not found: %s", toolName),
 		}
@@ -465,7 +459,7 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 	}
 
 	if len(missingParams) > 0 {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    InvalidParamsCode,
 			Message: fmt.Sprintf("Missing required parameters: %s", strings.Join(missingParams, ", ")),
 		}
@@ -479,14 +473,14 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 	if strings.Contains(strings.ToLower(toolName), "echo") {
 		toolResult, toolErr = handleEchoTool(toolParams)
 	} else {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    InternalErrorCode,
 			Message: fmt.Sprintf("Tool '%s' is registered but has no implementation", toolName),
 		}
 	}
 
 	if toolErr != nil {
-		return nil, &rest.JSONRPCError{
+		return nil, &domain.JSONRPCError{
 			Code:    InternalErrorCode,
 			Message: toolErr.Error(),
 		}
@@ -521,7 +515,7 @@ func handleEchoTool(params map[string]interface{}) (interface{}, error) {
 		}
 	}
 
-	// Return formatted result
+	// Return formatted result using the MCP content format
 	return map[string]interface{}{
 		"content": []map[string]interface{}{
 			{
@@ -574,7 +568,7 @@ func createErrorResponse(id interface{}, code int, message string) map[string]in
 }
 
 // createErrorResponseFromJSONRPCError creates an error response from a JSONRPCError
-func createErrorResponseFromJSONRPCError(id interface{}, err *rest.JSONRPCError) map[string]interface{} {
+func createErrorResponseFromJSONRPCError(id interface{}, err *domain.JSONRPCError) map[string]interface{} {
 	return map[string]interface{}{
 		"jsonrpc": JSONRPCVersion,
 		"id":      id,
