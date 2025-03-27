@@ -9,12 +9,16 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 BINARY_NAME=mcp-server
+STDIO_BIN_SERVER=bin/echo-stdio-server
+SSE_BIN_SERVER=bin/echo-sse-server
 ECHO_SSE_SERVER=cmd/echo-sse-server/main.go
+ECHO_STDIO_SERVER=cmd/echo-stdio-server/main.go
 
 all: test build
 
 build:
-	$(GOBUILD) -o bin/$(BINARY_NAME) $(ECHO_SSE_SERVER)
+	$(GOBUILD) -o $(STDIO_BIN_SERVER) $(ECHO_STDIO_SERVER)
+	$(GOBUILD) -o $(SSE_BIN_SERVER) $(ECHO_SSE_SERVER)
 
 example:
 	$(GOCMD) run $(ECHO_SSE_SERVER)

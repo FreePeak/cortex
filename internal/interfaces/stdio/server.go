@@ -342,15 +342,19 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 				return
 			}
 
-			// Get tool parameters
+			// Get tool parameters - check both parameters and arguments fields
 			toolParams, ok := params["parameters"].(map[string]interface{})
 			if !ok {
-				toolParams = map[string]interface{}{}
+				// Try arguments field if parameters is not available
+				toolParams, ok = params["arguments"].(map[string]interface{})
+				if !ok {
+					toolParams = map[string]interface{}{}
+				}
 			}
 
 			// Handle specific tools
 			switch toolName {
-			case "mcp_golang_mcp_server_sse_echo":
+			case "echo", "echo_golang_mcp_server_stdio", "mcp_golang_mcp_server_ws_echo_golang_mcp_server_stdio":
 				// Handle echo tool
 				message, ok := toolParams["message"].(string)
 				if !ok || message == "" {
@@ -367,7 +371,7 @@ func (s *StdioServer) processMessage(ctx context.Context, line string, writer io
 					return
 				}
 
-				// Echo the message back
+				// Echo the message back with content as an array of objects
 				result = map[string]interface{}{
 					"content": []map[string]interface{}{
 						{
