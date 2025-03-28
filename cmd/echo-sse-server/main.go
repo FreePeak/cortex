@@ -31,7 +31,7 @@ Available tools:
 Available prompts:
 - greeting: A simple greeting prompt
 
-You can connect to this server from Cursor by going to Settings > Extensions > 
+You can connect to this server from Cursor by going to Settings > Extensions >
 Model Context Protocol and entering 'http://localhost:8080' as the server URL.
 `
 )

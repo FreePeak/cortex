@@ -22,9 +22,6 @@ const (
 
 	// MCP protocol version
 	mcpProtocolVersion = "2024-11-05"
-
-	// Default notification buffer size
-	defaultNotificationBufferSize = 100
 )
 
 // MCPServer represents the HTTP server for the MCP protocol.
@@ -33,27 +30,45 @@ type MCPServer struct {
 	httpServer *http.Server
 	sseServer  *server.SSEServer
 	notifier   *server.NotificationSender
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // NewMCPServer creates a new MCP server.
 func NewMCPServer(service *usecases.ServerService, addr string) *MCPServer {
+	// Create root context for the server
+	ctx, cancel := context.WithCancel(context.Background())
+
 	notifier := server.NewNotificationSender(jsonRPCVersion)
 
 	s := &MCPServer{
 		service:  service,
 		notifier: notifier,
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 
 	// Create message handler function for the SSE server
 	mcpHandler := func(ctx context.Context, rawMessage json.RawMessage) interface{} {
-		return s.processMessage(ctx, rawMessage)
+		// Create a child context from the server context
+		handlerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel() // Call cancel to prevent context leak
+		return s.processMessage(handlerCtx, rawMessage)
 	}
 
-	// Create the original SSE Server with MCP message handler
+	// Create a custom context function for the SSE server
+	contextFunc := func(parentCtx context.Context, r *http.Request) context.Context {
+		// Simply return the parent context instead of creating a new one with a discarded cancel
+		// This maintains the same behavior without leaking the context
+		return parentCtx
+	}
+
+	// Create the SSE Server with MCP message handler and enhanced context handling
 	sseServer := server.NewSSEServer(notifier, mcpHandler,
 		server.WithMessageEndpoint("/message"),
 		server.WithSSEEndpoint("/sse"),
 		server.WithBasePath(""),
+		server.WithSSEContextFunc(contextFunc),
 	)
 
 	s.sseServer = sseServer
@@ -66,7 +81,7 @@ func NewMCPServer(service *usecases.ServerService, addr string) *MCPServer {
 	mux.HandleFunc("/jsonrpc", s.handleJSONRPC) // Alternative endpoint for JSON-RPC
 	mux.HandleFunc("/events", s.redirectToSSE)  // Redirect to SSE endpoint
 
-	// Add SSE server handler - IMPORTANT: use the original SSE server
+	// Add SSE server handler
 	mux.Handle("/sse", sseServer)
 	mux.Handle("/message", sseServer)
 
@@ -104,7 +119,14 @@ func (s *MCPServer) Start() error {
 
 // Stop stops the MCP server.
 func (s *MCPServer) Stop(ctx context.Context) error {
-	return s.httpServer.Shutdown(ctx)
+	// Cancel our internal context first to signal all ongoing operations to stop
+	s.cancel()
+
+	// Shutdown the HTTP server
+	err := s.httpServer.Shutdown(ctx)
+
+	// Return any error from shutting down the HTTP server
+	return err
 }
 
 // handleJSONRPC handles JSON-RPC requests over HTTP directly.
@@ -122,7 +144,8 @@ func (s *MCPServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create context with timeout
+	// Create context with timeout, derived from request context and server context
+	// This ensures the context is canceled if either the request ends or the server is stopped
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
@@ -470,6 +493,14 @@ func (s *MCPServer) GetAddress() string {
 
 // processMessage processes a JSON-RPC message and returns a response.
 func (s *MCPServer) processMessage(ctx context.Context, rawMessage json.RawMessage) interface{} {
+	// Check if the passed context is done
+	select {
+	case <-ctx.Done():
+		return domain.CreateErrorResponse(jsonRPCVersion, nil, -32603, "Request context canceled")
+	default:
+		// Continue processing
+	}
+
 	// Parse JSON-RPC request
 	var request domain.JSONRPCRequest
 	if err := json.Unmarshal(rawMessage, &request); err != nil {

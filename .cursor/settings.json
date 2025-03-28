@@ -1,0 +1,5 @@
+{
+  "mcp.executablePath": "/Users/harvey/Work/dev/FreePeak/Opensource/golang-mcp-server-sdk/mcp-stdio",
+  "mcp.transport": "stdio",
+  "mcp.logging": true
+}
