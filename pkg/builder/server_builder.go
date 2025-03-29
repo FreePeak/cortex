@@ -4,10 +4,10 @@ package builder
 import (
 	"context"
 
-	internalBuilder "github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
-	internalDomain "github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/types"
+	internalBuilder "github.com/FreePeak/cortex/internal/builder"
+	internalDomain "github.com/FreePeak/cortex/internal/domain"
+	"github.com/FreePeak/cortex/internal/interfaces/stdio"
+	"github.com/FreePeak/cortex/pkg/types"
 )
 
 // ServerBuilder implements the Builder pattern for creating MCP servers.

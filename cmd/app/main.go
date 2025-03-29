@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
+	"github.com/FreePeak/cortex/internal/interfaces/rest"
+	"github.com/FreePeak/cortex/internal/usecases"
 )
 
 func main() {

@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/tools"
+	"github.com/FreePeak/cortex/pkg/server"
+	"github.com/FreePeak/cortex/pkg/tools"
 )
 
 const (

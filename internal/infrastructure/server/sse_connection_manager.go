@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 )
 
 // sseConnectionManager implements the domain.ConnectionManager interface

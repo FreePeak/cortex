@@ -65,8 +65,8 @@ All examples now use the public SDK interface from the `pkg/` directory. The mai
 
 ```go
 import (
-    "github.com/FreePeak/golang-mcp-server-sdk/pkg/server"
-    "github.com/FreePeak/golang-mcp-server-sdk/pkg/tools"
+    "github.com/FreePeak/cortex/pkg/server"
+    "github.com/FreePeak/cortex/pkg/tools"
 )
 
 // Create a server

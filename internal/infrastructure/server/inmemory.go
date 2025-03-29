@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 )
 
 // InMemoryResourceRepository implements a ResourceRepository using in-memory storage.

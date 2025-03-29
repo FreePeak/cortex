@@ -3,8 +3,8 @@ package builder
 import (
 	"context"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
+	"github.com/FreePeak/cortex/internal/domain"
+	"github.com/FreePeak/cortex/internal/interfaces/stdio"
 )
 
 // ToolHandlerFunc is an adapter function for handling tool calls in the MCP server.

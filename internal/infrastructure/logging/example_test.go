@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
+	"github.com/FreePeak/cortex/internal/infrastructure/logging"
 )
 
 func Example() {

@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
+	"github.com/FreePeak/cortex/internal/domain"
+	"github.com/FreePeak/cortex/internal/infrastructure/logging"
+	"github.com/FreePeak/cortex/internal/infrastructure/server"
+	"github.com/FreePeak/cortex/internal/usecases"
 )
 
 const (

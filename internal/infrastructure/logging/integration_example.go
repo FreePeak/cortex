@@ -6,7 +6,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 )
 
 // contextKey is a custom type for context keys to avoid collisions

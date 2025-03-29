@@ -1,4 +1,4 @@
-# Makefile for golang-mcp-server-sdk
+# Makefile for cortex
 .PHONY: build test test-race lint clean run example coverage deps update-deps help
 
 # Go parameters

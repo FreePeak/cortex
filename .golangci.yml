@@ -1,12 +1,38 @@
 run:
   timeout: 5m
-  modules-download-mode: readonly
-  tests: true
+  skip-files:
+    - ".*\\.pb\\.go$"
+  allow-parallel-runners: true
+  go: '1.24'
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+  govet:
+    check-shadowing: true
+  gofmt:
+    simplify: true
+  gocyclo:
+    min-complexity: 15
+  misspell:
+    locale: US
+  lll:
+    line-length: 120
+  revive:
+    severity: warning
+    confidence: 0.8
+  gocritic:
+    enabled-tags:
+      - performance
+  goimports:
+    local-prefixes: github.com/FreePeak/cortex
 
 linters:
+  disable-all: true
   enable:
     - errcheck
     - gofmt
+    - goimports
     - gosimple
     - govet
     - ineffassign
@@ -14,11 +40,6 @@ linters:
     - staticcheck
     - typecheck
     - unused
-    - whitespace
-
-linters-settings:
-  goimports:
-    local-prefixes: github.com/FreePeak/golang-mcp-server-sdk
 
 issues:
   exclude-rules:

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 )
 
 // JSONRPCNotification represents a notification sent to clients via JSON-RPC.
