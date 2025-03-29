@@ -1,7 +1,5 @@
 <h1 align="center">
-
    <img alt="main logo" src="logo.svg" width="150"/>
-   
    <br/>
    Cortex
 </h1>
@@ -9,54 +7,56 @@
 
 <p align="center">
 	<a href="https://pkg.go.dev/github.com/FreePeak/cortex"><img src="https://pkg.go.dev/badge/github.com/FreePeak/cortex.svg" alt="Go Reference"></a>
-	<a href="https://goreportcard.com/report/github.com/FreePeak/cortex"><img src="https://goreportcard.com/badge/github.com/FreePeak/cortex" alt="Go Reference"></a>
-	<a href="https://github.com/FreePeak/cortex/actions/workflows/test.yaml"><img src="https://github.com/FreePeak/cortex/actions/workflows/test.yaml/badge.svg"/></a>
-	<a href="https://github.com/FreePeak/cortex/actions/workflows/golangci-lint.yaml"><img src="https://github.com/FreePeak/cortex/actions/workflows/golangci-lint.yaml/badge.svg"/></a>
+	<a href="https://goreportcard.com/report/github.com/FreePeak/cortex"><img src="https://goreportcard.com/badge/github.com/FreePeak/cortex" alt="Go Report Card"></a>
+	<a href="https://github.com/FreePeak/cortex/actions/workflows/test.yaml"><img src="https://github.com/FreePeak/cortex/actions/workflows/test.yaml/badge.svg" alt="Build Status"/></a>
+	<a href="https://github.com/FreePeak/cortex/actions/workflows/golangci-lint.yaml"><img src="https://github.com/FreePeak/cortex/actions/workflows/golangci-lint.yaml/badge.svg" alt="Lint Status"/></a>
+	<a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+	<a href="https://github.com/FreePeak/cortex/graphs/contributors"><img src="https://img.shields.io/github/contributors/FreePeak/cortex" alt="Contributors"></a>
 </p>
 
-#### Build MCP Servers Declaratively in Go
+## Table of Contents
+- [Overview](#overview)
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [What is MCP?](#what-is-mcp)
+- [Core Concepts](#core-concepts)
+  - [Server](#server)
+  - [Tools](#tools)
+  - [Resources](#resources)
+  - [Prompts](#prompts)
+- [Running Your Server](#running-your-server)
+  - [stdio](#stdio)
+  - [HTTP with SSE](#http-with-sse)
+  - [Multi-Protocol](#multi-protocol)
+  - [Testing and Debugging](#testing-and-debugging)
+- [Examples](#examples)
+  - [Echo Server](#echo-server)
+  - [Calculator Server](#calculator-server)
+- [Package Structure](#package-structure)
+- [Contributing](#contributing)
+- [License](#license)
+- [Support & Contact](#support--contact)
 
-[Features](#features) • [Tool Example](#tool-example) • [Documentation](#documentation) • [Sources](#sources)
+## Overview
 
-Cortex is a Go library for building context servers supporting the Model Context Protocol (MCP). It provides a clean, declarative approach to building MCP servers, allowing you to easily define tools, resources, and prompts.
+The Model Context Protocol allows applications to provide context for LLMs in a standardized way, separating the concerns of providing context from the actual LLM interaction. Cortex implements the full MCP specification, making it easy to:
 
-With Cortex, you can easily integrate AI capabilities into your applications by providing a standardized way for LLMs to interact with your application's data and functionality.
+- Build MCP servers that expose resources and tools
+- Use standard transports like stdio and Server-Sent Events (SSE)
+- Handle all MCP protocol messages and lifecycle events
+- Follow Go best practices and clean architecture principles
 
-## Features
+> **Note:** Cortex is always updated to align with the latest MCP specification from [spec.modelcontextprotocol.io/latest](https://spec.modelcontextprotocol.io/latest)
 
-Here is a list of features that are implemented and planned:
+## Installation
 
-* **Base**
-  * Lifecycle management
-  * Health/ping endpoint
-  * Progress tracking (planned)
-* **Transports**
-  * Stdio Transport
-  * HTTP/SSE Transport
-  * Multi-protocol support
-* **Tools**
-  * Declarative tool definition
-  * Parameter validation
-  * Type safety
-* **Resources**
-  * Static resources
-  * Dynamic resources
-  * Resource templates (planned)
-  * Resource subscriptions
-* **Prompts**
-  * Prompt definitions
-  * Prompt completion
-* **Testing**
-  * Functional testing utilities
-  * Mocks for testing
-* **Core Infrastructure**
-  * Clean dependency injection
-  * Structured logging
-  * Graceful shutdown
+```bash
+go get github.com/FreePeak/cortex
+```
 
-## Tool Example
+## Quickstart
 
-Here's a simple example of creating an echo server with Cortex:
+Let's create a simple MCP server that exposes an echo tool:
 
 ```go
 package main
@@ -123,7 +123,167 @@ func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{
 }
 ```
 
-You can run this example with:
+## What is MCP?
+
+The [Model Context Protocol (MCP)](https://modelcontextprotocol.io) is a standardized protocol that allows applications to provide context for LLMs in a secure and efficient manner. It separates the concerns of providing context and tools from the actual LLM interaction. MCP servers can:
+
+- Expose data through **Resources** (read-only data endpoints)
+- Provide functionality through **Tools** (executable functions)
+- Define interaction patterns through **Prompts** (reusable templates)
+- Support various transport methods (stdio, HTTP/SSE)
+
+## Core Concepts
+
+### Server
+
+The MCP Server is your core interface to the MCP protocol. It handles connection management, protocol compliance, and message routing:
+
+```go
+// Create a new MCP server
+mcpServer := server.NewMCPServer("My App", "1.0.0")
+```
+
+### Tools
+
+Tools let LLMs take actions through your server. Unlike resources, tools are expected to perform computation and have side effects:
+
+```go
+// Define a calculator tool
+calculatorTool := tools.NewTool("calculator",
+    tools.WithDescription("Performs basic arithmetic"),
+    tools.WithString("operation",
+        tools.Description("The operation to perform (add, subtract, multiply, divide)"),
+        tools.Required(),
+    ),
+    tools.WithNumber("a", 
+        tools.Description("First number"),
+        tools.Required(),
+    ),
+    tools.WithNumber("b",
+        tools.Description("Second number"),
+        tools.Required(),
+    ),
+)
+
+// Add tool to server with a handler
+mcpServer.AddTool(ctx, calculatorTool, handleCalculator)
+```
+
+### Resources
+
+Resources are how you expose data to LLMs. They're similar to GET endpoints in a REST API - they provide data but shouldn't perform significant computation or have side effects:
+
+```go
+// Create a resource (Currently using the internal API)
+resource := &domain.Resource{
+    URI:         "sample://hello-world",
+    Name:        "Hello World Resource",
+    Description: "A sample resource for demonstration purposes",
+    MIMEType:    "text/plain",
+}
+
+// Note: Resource support is being updated in the public API
+```
+
+### Prompts
+
+Prompts are reusable templates that help LLMs interact with your server effectively:
+
+```go
+// Create a prompt (Currently using the internal API)
+codeReviewPrompt := &domain.Prompt{
+    Name:        "review-code",
+    Description: "A prompt for code review",
+    Template:    "Please review this code:\n\n{{.code}}",
+    Parameters: []domain.PromptParameter{
+        {
+            Name:        "code",
+            Description: "The code to review",
+            Type:        "string",
+            Required:    true,
+        },
+    },
+}
+
+// Note: Prompt support is being updated in the public API
+```
+
+## Running Your Server
+
+MCP servers in Go can be connected to different transports depending on your use case:
+
+### stdio
+
+For command-line tools and direct integrations:
+
+```go
+// Start a stdio server
+if err := mcpServer.ServeStdio(); err != nil {
+    fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+    os.Exit(1)
+}
+```
+
+### HTTP with SSE
+
+For web applications, you can use Server-Sent Events (SSE) for real-time communication:
+
+```go
+// Configure the HTTP address
+mcpServer.SetAddress(":8080")
+
+// Start an HTTP server with SSE support
+if err := mcpServer.ServeHTTP(); err != nil {
+    log.Fatalf("HTTP server error: %v", err)
+}
+
+// For graceful shutdown
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := mcpServer.Shutdown(ctx); err != nil {
+    log.Fatalf("Server shutdown error: %v", err)
+}
+```
+
+### Multi-Protocol
+
+You can also run multiple protocol servers simultaneously:
+
+```go
+// Configure server for both HTTP and stdio
+mcpServer := server.NewMCPServer("Multi-Protocol Server", "1.0.0")
+mcpServer.SetAddress(":8080")
+mcpServer.AddTool(ctx, echoTool, handleEcho)
+
+// Start HTTP server in a goroutine
+go func() {
+    if err := mcpServer.ServeHTTP(); err != nil {
+        log.Fatalf("HTTP server error: %v", err)
+    }
+}()
+
+// Start stdio server in the main thread
+if err := mcpServer.ServeStdio(); err != nil {
+    log.Fatalf("Stdio server error: %v", err)
+}
+```
+
+### Testing and Debugging
+
+For testing your MCP server, you can use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or send JSON-RPC messages directly:
+
+```bash
+# Test an echo tool with stdio
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}' | go run your_server.go
+```
+
+## Examples
+
+Check out the `examples` directory for complete example servers:
+
+### Echo Server
+
+A simple echo server example is available in `examples/echo_server.go`:
 
 ```bash
 # Run the example
@@ -135,13 +295,9 @@ Test with:
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}' | go run examples/echo_server.go
 ```
 
-## Calculator Example
+### Calculator Server
 
-For a more advanced example, check out the calculator server which demonstrates:
-- Running in either HTTP or stdio mode
-- Using command-line flags for configuration
-- Parameter validation and type conversion
-- Graceful shutdown for HTTP servers
+A more advanced calculator example with both HTTP and stdio modes is available in `examples/calculator/`:
 
 ```bash
 # Run in HTTP mode
@@ -151,13 +307,23 @@ go run examples/calculator/main.go --mode http
 go run examples/calculator/main.go --mode stdio
 ```
 
-## Documentation
+## Package Structure
 
-Comprehensive documentation is available in the [docs](./docs) directory.
+The library is organized following clean architecture principles:
 
-## About MCP
+```
+cortex/
+├── pkg/                    # Public API (exposed to users)
+│   ├── builder/            # Public builder pattern for server construction
+│   ├── server/             # Public server implementation
+│   ├── tools/              # Utilities for creating MCP tools
+│   └── types/              # Shared types and interfaces
+├── internal/               # Private implementation details
+├── examples/               # Example code snippets and use cases
+└── cmd/                    # Example MCP server applications
+```
 
-The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is a standard protocol for providing context to Large Language Models. It allows LLMs to access data and functionality from applications in a secure, controlled way.
+The `pkg/` directory contains all publicly exposed APIs that users of the library should interact with.
 
 ## Contributing
 
