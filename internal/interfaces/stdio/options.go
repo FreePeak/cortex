@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 )
 
 // WithToolHandler registers a custom handler function for a specific tool.

@@ -1,11 +1,11 @@
 # Directory Structure
 
-The golang-mcp-server-sdk is organized following clean architecture principles and GoLang best practices.
+The cortex is organized following clean architecture principles and GoLang best practices.
 
 ## Directory Overview
 
 ```
-golang-mcp-server-sdk/
+cortex/
 ├── bin/                    # Compiled binaries
 ├── cmd/                    # Example MCP server applications
 │   ├── echo-sse-server/    # SSE-based example server

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
+	"github.com/FreePeak/cortex/internal/infrastructure/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

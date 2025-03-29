@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
+	"github.com/FreePeak/cortex/internal/infrastructure/logging"
 	"github.com/google/uuid"
 )
 

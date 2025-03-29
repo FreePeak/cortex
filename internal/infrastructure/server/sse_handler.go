@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 	"github.com/google/uuid"
 )
 

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 )
 
 // Test mocks

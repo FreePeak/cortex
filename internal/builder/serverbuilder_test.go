@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
+	"github.com/FreePeak/cortex/internal/domain"
+	"github.com/FreePeak/cortex/internal/infrastructure/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

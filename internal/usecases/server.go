@@ -4,7 +4,7 @@ package usecases
 import (
 	"context"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/cortex/internal/domain"
 )
 
 // ServerService handles business logic for the MCP server.

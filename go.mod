@@ -1,4 +1,4 @@
-module github.com/FreePeak/golang-mcp-server-sdk
+module github.com/FreePeak/cortex
 
 go 1.23
 

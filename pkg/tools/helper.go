@@ -2,7 +2,7 @@
 package tools
 
 import (
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/types"
+	"github.com/FreePeak/cortex/pkg/types"
 )
 
 // ToolOption is a function that configures a tool.

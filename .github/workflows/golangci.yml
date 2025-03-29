@@ -1,3 +1,42 @@
+name: golangci-lint
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+jobs:
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          args: --timeout=5m
+          version: latest
+          # Optional: show only new issues if it's a pull request. The default value is `false`.
+          only-new-issues: true
+          # Optional: if set to true then the all caching functionality will be complete disabled,
+          #           takes precedence over all other caching options.
+          skip-cache: true
+          # Optional: the working directory, useful for monorepos.
+          # working-directory: somedir
+          # Optional: configuration file for golangci-lint
+          config: .golangci.yml
+          # options from https://github.com/golangci/golangci-lint-action
+          golangci-lint-flags: "--config=.golangci.yml --issues-exit-code=0 --timeout=8m --out-format=line-number"
+          # Additional envs
+          env:
+            GO111MODULE: on
+            GOPROXY: https://proxy.golang.org
+            GOSUMDB: sum.golang.org
+          args: --timeout=10m --local-prefixes=github.com/FreePeak/cortex
+
 run:
   timeout: 5m
   modules-download-mode: readonly
@@ -18,7 +57,7 @@ linters:
 
 linters-settings:
   goimports:
-    local-prefixes: github.com/FreePeak/golang-mcp-server-sdk
+    local-prefixes: github.com/FreePeak/cortex
 
 issues:
   exclude-rules:

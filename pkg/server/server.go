@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/types"
+	"github.com/FreePeak/cortex/internal/builder"
+	"github.com/FreePeak/cortex/internal/domain"
+	"github.com/FreePeak/cortex/internal/interfaces/stdio"
+	"github.com/FreePeak/cortex/pkg/types"
 )
 
 // ToolHandler is a function that handles tool calls.

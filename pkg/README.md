@@ -1,6 +1,6 @@
-# MCP Server SDK for Go
+# MCP Server Platform for Go
 
-The Model Context Protocol (MCP) Server SDK for Go provides a simple way to create MCP-compliant servers in Go. This SDK allows you to:
+The Model Context Protocol (MCP) Server Platform for Go provides a simple way to create MCP-compliant servers in Go. This Platform allows you to:
 
 - Create MCP servers with custom tools
 - Handle tool calls with your own business logic
@@ -19,8 +19,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/tools"
+	"github.com/FreePeak/cortex/pkg/server"
+	"github.com/FreePeak/cortex/pkg/tools"
 )
 
 func main() {
@@ -72,7 +72,7 @@ func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{
 
 ### Creating Tools
 
-The SDK provides a fluent interface for creating tools and their parameters:
+The Platform provides a fluent interface for creating tools and their parameters:
 
 ```go
 // Create a calculator tool
@@ -147,7 +147,7 @@ func handleCalculator(ctx context.Context, request server.ToolCallRequest) (inte
 
 ## Package Structure
 
-The SDK consists of several packages:
+The Platform consists of several packages:
 
 - `pkg/server`: Core server implementation
 - `pkg/tools`: Utilities for creating and configuring tools

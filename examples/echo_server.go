@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/pkg/tools"
+	"github.com/FreePeak/cortex/pkg/server"
+	"github.com/FreePeak/cortex/pkg/tools"
 )
 
 func main() {

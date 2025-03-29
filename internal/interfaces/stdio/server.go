@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
+	"github.com/FreePeak/cortex/internal/domain"
+	"github.com/FreePeak/cortex/internal/infrastructure/logging"
+	"github.com/FreePeak/cortex/internal/interfaces/rest"
 )
 
 // Constants for JSON-RPC
