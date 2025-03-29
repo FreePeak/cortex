@@ -152,3 +152,369 @@ func TestLoggerWithFormattedMessages(t *testing.T) {
 		t.Error("Formatted message not found in logs")
 	}
 }
+
+// Additional tests to improve coverage
+
+func TestNew(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr bool
+	}{
+		{
+			name: "Default config",
+			config: Config{
+				Level:       InfoLevel,
+				Development: false,
+				OutputPaths: []string{"stdout"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Debug level",
+			config: Config{
+				Level:       DebugLevel,
+				Development: true,
+				OutputPaths: []string{"stdout"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Warn level",
+			config: Config{
+				Level:       WarnLevel,
+				Development: false,
+				OutputPaths: []string{"stdout"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Error level",
+			config: Config{
+				Level:       ErrorLevel,
+				Development: false,
+				OutputPaths: []string{"stdout"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Fatal level",
+			config: Config{
+				Level:       FatalLevel,
+				Development: false,
+				OutputPaths: []string{"stdout"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Panic level",
+			config: Config{
+				Level:       PanicLevel,
+				Development: false,
+				OutputPaths: []string{"stdout"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Unknown level",
+			config: Config{
+				Level:       LogLevel("unknown"),
+				Development: false,
+				OutputPaths: []string{"stdout"},
+			},
+			wantErr: false, // Should default to InfoLevel
+		},
+		{
+			name: "With initial fields",
+			config: Config{
+				Level:       InfoLevel,
+				Development: false,
+				OutputPaths: []string{"stdout"},
+				InitialFields: Fields{
+					"service": "test-service",
+					"version": "1.0.0",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid output path",
+			config: Config{
+				Level:       InfoLevel,
+				Development: false,
+				OutputPaths: []string{"/invalid/path/that/doesnt/exist"},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger, err := New(tt.config)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && logger == nil {
+				t.Error("Expected non-nil logger")
+			}
+		})
+	}
+}
+
+func TestDefaultConfig(t *testing.T) {
+	config := DefaultConfig()
+	if config.Level != InfoLevel {
+		t.Errorf("Expected InfoLevel, got %v", config.Level)
+	}
+	if config.Development != false {
+		t.Errorf("Expected Development to be false")
+	}
+	if len(config.OutputPaths) != 1 || config.OutputPaths[0] != "stdout" {
+		t.Errorf("Expected OutputPaths to be [stdout], got %v", config.OutputPaths)
+	}
+}
+
+func TestDevelopmentConfig(t *testing.T) {
+	config := DevelopmentConfig()
+	if config.Level != DebugLevel {
+		t.Errorf("Expected DebugLevel, got %v", config.Level)
+	}
+	if config.Development != true {
+		t.Errorf("Expected Development to be true")
+	}
+	if len(config.OutputPaths) != 1 || config.OutputPaths[0] != "stdout" {
+		t.Errorf("Expected OutputPaths to be [stdout], got %v", config.OutputPaths)
+	}
+}
+
+func TestProductionConfig(t *testing.T) {
+	config := ProductionConfig()
+	if config.Level != InfoLevel {
+		t.Errorf("Expected InfoLevel, got %v", config.Level)
+	}
+	if config.Development != false {
+		t.Errorf("Expected Development to be false")
+	}
+	if len(config.OutputPaths) != 1 || config.OutputPaths[0] != "stdout" {
+		t.Errorf("Expected OutputPaths to be [stdout], got %v", config.OutputPaths)
+	}
+}
+
+func TestNewDevelopment(t *testing.T) {
+	logger, err := NewDevelopment()
+	if err != nil {
+		t.Errorf("NewDevelopment() error = %v", err)
+		return
+	}
+	if logger == nil {
+		t.Error("Expected non-nil logger")
+	}
+}
+
+func TestNewProduction(t *testing.T) {
+	logger, err := NewProduction()
+	if err != nil {
+		t.Errorf("NewProduction() error = %v", err)
+		return
+	}
+	if logger == nil {
+		t.Error("Expected non-nil logger")
+	}
+}
+
+func TestWithEmptyFields(t *testing.T) {
+	testLogger, _ := newTestLogger(t)
+	defer testLogger.Sync()
+
+	newLogger := testLogger.With(Fields{})
+	if newLogger != testLogger {
+		t.Error("Expected same logger instance when With is called with empty fields")
+	}
+}
+
+func TestLoggerAllMethods(t *testing.T) {
+	testLogger, buf := newTestLogger(t)
+	defer testLogger.Sync()
+
+	ctx := context.Background()
+
+	// Test all methods
+	tests := []struct {
+		name     string
+		logFunc  func()
+		contains string
+	}{
+		{
+			name: "Debug",
+			logFunc: func() {
+				testLogger.Debug("debug test")
+			},
+			contains: "debug test",
+		},
+		{
+			name: "Debug with fields",
+			logFunc: func() {
+				testLogger.Debug("debug with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		{
+			name: "Info",
+			logFunc: func() {
+				testLogger.Info("info test")
+			},
+			contains: "info test",
+		},
+		{
+			name: "Info with fields",
+			logFunc: func() {
+				testLogger.Info("info with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		{
+			name: "Warn",
+			logFunc: func() {
+				testLogger.Warn("warn test")
+			},
+			contains: "warn test",
+		},
+		{
+			name: "Warn with fields",
+			logFunc: func() {
+				testLogger.Warn("warn with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		{
+			name: "Error",
+			logFunc: func() {
+				testLogger.Error("error test")
+			},
+			contains: "error test",
+		},
+		{
+			name: "Error with fields",
+			logFunc: func() {
+				testLogger.Error("error with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		// Skip Fatal and Panic as they would terminate the test
+		{
+			name: "DebugContext",
+			logFunc: func() {
+				testLogger.DebugContext(ctx, "debug context test")
+			},
+			contains: "debug context test",
+		},
+		{
+			name: "DebugContext with fields",
+			logFunc: func() {
+				testLogger.DebugContext(ctx, "debug context with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		{
+			name: "InfoContext",
+			logFunc: func() {
+				testLogger.InfoContext(ctx, "info context test")
+			},
+			contains: "info context test",
+		},
+		{
+			name: "InfoContext with fields",
+			logFunc: func() {
+				testLogger.InfoContext(ctx, "info context with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		{
+			name: "WarnContext",
+			logFunc: func() {
+				testLogger.WarnContext(ctx, "warn context test")
+			},
+			contains: "warn context test",
+		},
+		{
+			name: "WarnContext with fields",
+			logFunc: func() {
+				testLogger.WarnContext(ctx, "warn context with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		{
+			name: "ErrorContext",
+			logFunc: func() {
+				testLogger.ErrorContext(ctx, "error context test")
+			},
+			contains: "error context test",
+		},
+		{
+			name: "ErrorContext with fields",
+			logFunc: func() {
+				testLogger.ErrorContext(ctx, "error context with fields", Fields{"key": "value"})
+			},
+			contains: `"key":"value"`,
+		},
+		// Skip FatalContext and PanicContext as they would terminate the test
+		{
+			name: "Debugf",
+			logFunc: func() {
+				testLogger.Debugf("debug %s test", "format")
+			},
+			contains: "debug format test",
+		},
+		{
+			name: "Infof",
+			logFunc: func() {
+				testLogger.Infof("info %s test", "format")
+			},
+			contains: "info format test",
+		},
+		{
+			name: "Warnf",
+			logFunc: func() {
+				testLogger.Warnf("warn %s test", "format")
+			},
+			contains: "warn format test",
+		},
+		{
+			name: "Errorf",
+			logFunc: func() {
+				testLogger.Errorf("error %s test", "format")
+			},
+			contains: "error format test",
+		},
+		// Skip Fatalf and Panicf as they would terminate the test
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf.Reset()
+			tt.logFunc()
+			output := buf.String()
+			if !strings.Contains(output, tt.contains) {
+				t.Errorf("Expected output to contain %q, got %q", tt.contains, output)
+			}
+		})
+	}
+}
+
+func TestDefaultLogger(t *testing.T) {
+	// Should not panic
+	logger := Default()
+	if logger == nil {
+		t.Error("Expected non-nil default logger")
+	}
+
+	// Test setting default
+	testLogger, _ := newTestLogger(t)
+	SetDefault(testLogger)
+
+	// Verify the default was set
+	if Default() != testLogger {
+		t.Error("Expected SetDefault to set the default logger")
+	}
+}

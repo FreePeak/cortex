@@ -119,6 +119,11 @@ func (n *NotificationSender) BroadcastNotification(ctx context.Context, notifica
 	var errsMu sync.Mutex
 	var errs []error
 
+	// First check if the context is already canceled before starting
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Function to process a session
 	processSession := func(key, value interface{}) bool {
 		wg.Add(1)
@@ -132,6 +137,7 @@ func (n *NotificationSender) BroadcastNotification(ctx context.Context, notifica
 				// Successfully sent
 			case <-ctx.Done():
 				errsMu.Lock()
+				// Use context.Err() directly to allow proper error checking with errors.Is
 				errs = append(errs, fmt.Errorf("context cancelled for session %s: %w", session.ID(), ctx.Err()))
 				errsMu.Unlock()
 			default:

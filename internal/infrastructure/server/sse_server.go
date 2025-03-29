@@ -450,11 +450,11 @@ func (s *SSEServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 
 		// Send HTTP response
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
+		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(response)
 	} else {
-		// For notifications, just send 202 Accepted with no body
-		w.WriteHeader(http.StatusAccepted)
+		// For notifications, just send 200 OK with no body
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
