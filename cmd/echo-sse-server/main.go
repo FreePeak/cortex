@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +9,8 @@ import (
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
 )
 
 const (
@@ -37,8 +38,20 @@ Model Context Protocol and entering 'http://localhost:8080' as the server URL.
 )
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("Starting Example MCP Server...")
+	// Configure logger
+	logger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stdout"},
+		InitialFields: logging.Fields{
+			"component": "echo-sse",
+		},
+	})
+	if err != nil {
+		os.Exit(1)
+	}
+
+	logger.Info("Starting Example MCP Server...")
 
 	// Create sample data
 	sampleResource := &domain.Resource{
@@ -92,8 +105,9 @@ func main() {
 		AddTool(ctx, sampleTool).
 		AddPrompt(ctx, samplePrompt)
 
-	// Build the MCP server
-	mcpServer := serverBuilder.BuildMCPServer()
+	// Build the MCP server with logger
+	service := serverBuilder.BuildService()
+	mcpServer := rest.NewMCPServer(service, serverAddr, rest.WithLogger(logger))
 
 	// Handle graceful shutdown
 	shutdown := make(chan os.Signal, 1)
@@ -103,18 +117,18 @@ func main() {
 	go func() {
 		if err := mcpServer.Start(); err != nil {
 			if err.Error() != "http: Server closed" {
-				log.Fatalf("Server failed to start: %v", err)
+				logger.Fatal("Server failed to start", logging.Fields{"error": err})
 			}
 		}
 	}()
 
-	log.Printf("Server is running on %s", serverAddr)
-	log.Printf("You can connect to this server from Cursor by going to Settings > Extensions > Model Context Protocol and entering 'http://localhost:8080' as the server URL.")
-	log.Println("Press Ctrl+C to stop")
+	logger.Info("Server is running", logging.Fields{"address": serverAddr})
+	logger.Info("Connection instructions", logging.Fields{"instructions": "You can connect to this server from Cursor by going to Settings > Extensions > Model Context Protocol and entering 'http://localhost:8080' as the server URL."})
+	logger.Info("Press Ctrl+C to stop")
 
 	// Wait for shutdown signal
 	<-shutdown
-	log.Println("Shutting down server...")
+	logger.Info("Shutting down server...")
 
 	// Create a context with timeout for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -122,10 +136,10 @@ func main() {
 
 	// Shutdown server
 	if err := mcpServer.Stop(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		logger.Fatal("Server forced to shutdown", logging.Fields{"error": err})
 	}
 
 	// Small delay to allow final cleanup
 	time.Sleep(shutdownGraceful)
-	log.Println("Server stopped gracefully")
+	logger.Info("Server stopped gracefully")
 }

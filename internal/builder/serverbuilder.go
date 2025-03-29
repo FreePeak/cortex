@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
@@ -151,6 +152,23 @@ func (b *ServerBuilder) BuildStdioServer(opts ...stdio.StdioOption) *stdio.Stdio
 
 // ServeStdio builds and starts serving a stdio server
 func (b *ServerBuilder) ServeStdio(opts ...stdio.StdioOption) error {
+	// Create a default logger for stdio
+	logger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stderr"},
+		InitialFields: logging.Fields{
+			"component": "stdio-server",
+		},
+	})
+	if err != nil {
+		// If we can't create the logger, continue with the options provided
+		// The stdio server will create its own default logger
+	} else {
+		// Prepend the logger option so it can be overridden by user-provided options
+		opts = append([]stdio.StdioOption{stdio.WithLogger(logger)}, opts...)
+	}
+
 	mcpServer := b.BuildMCPServer()
 	return stdio.ServeStdio(mcpServer, opts...)
 }

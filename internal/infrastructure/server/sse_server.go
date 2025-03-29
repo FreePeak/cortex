@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
 	"github.com/google/uuid"
 )
 
@@ -138,12 +139,20 @@ type SSEServer struct {
 	srv             *http.Server
 	contextFunc     SSEContextFunc
 	mcpHandler      func(ctx context.Context, rawMessage json.RawMessage) interface{}
+	logger          *logging.Logger
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
 
 // SSEOption defines a function type for configuring SSEServer
 type SSEOption func(*SSEServer)
+
+// WithLogger sets the logger for the SSE server
+func WithLogger(logger *logging.Logger) SSEOption {
+	return func(s *SSEServer) {
+		s.logger = logger
+	}
+}
 
 // WithBaseURL sets the base URL for the SSE server
 func WithBaseURL(baseURL string) SSEOption {
@@ -212,12 +221,27 @@ func WithSSEContextFunc(fn SSEContextFunc) SSEOption {
 func NewSSEServer(notifier *NotificationSender, mcpHandler func(ctx context.Context, rawMessage json.RawMessage) interface{}, opts ...SSEOption) *SSEServer {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Create default logger
+	defaultLogger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stdout"},
+		InitialFields: logging.Fields{
+			"component": "sse-server",
+		},
+	})
+	if err != nil {
+		// Fallback to a simple default logger if we can't create the structured one
+		defaultLogger = logging.Default()
+	}
+
 	s := &SSEServer{
 		notifier:        notifier,
 		sseEndpoint:     "/sse",
 		messageEndpoint: "/message",
 		mcpHandler:      mcpHandler,
 		connectionPool:  NewConnectionPool(),
+		logger:          defaultLogger,
 		ctx:             ctx,
 		cancel:          cancel,
 	}

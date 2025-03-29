@@ -3,26 +3,38 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
 )
 
 // Create a custom context function that adds a timestamp
 func withTimestamp(ctx context.Context) context.Context {
-	// Log when the context function is called
-	log.Printf("Context function called with context: %v", ctx)
+	// Log when the context function is called - we'll use the logger
+	// that will be attached to the context later
 	return context.WithValue(ctx, "timestamp", fmt.Sprintf("%d", time.Now().Unix()))
 }
 
 func main() {
 	// Configure logger
-	logger := log.New(os.Stderr, "[ECHO-STDIO] ", log.LstdFlags)
-	logger.Println("Starting Echo Stdio Server...")
+	logger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stderr"},
+		InitialFields: logging.Fields{
+			"component": "echo-stdio",
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating logger: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger.Info("Starting Echo Stdio Server...")
 
 	// Create the echo tool definition with proper inputSchema
 	echoTool := &domain.Tool{
@@ -48,14 +60,14 @@ func main() {
 		AddTool(ctx, echoTool)
 
 	// Start the stdio server with our custom context function
-	logger.Println("Server ready. You can now send JSON-RPC requests via stdin.")
-	err := serverBuilder.ServeStdio(
-		stdio.WithErrorLogger(logger),
+	logger.Info("Server ready. You can now send JSON-RPC requests via stdin.")
+	err = serverBuilder.ServeStdio(
+		stdio.WithLogger(logger),
 		stdio.WithStdioContextFunc(withTimestamp),
 	)
 
 	if err != nil {
-		logger.Printf("Error serving stdio: %v", err)
+		logger.Error("Error serving stdio", logging.Fields{"error": err})
 		os.Exit(1)
 	}
 }

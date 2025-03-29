@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
 )
@@ -30,22 +30,53 @@ type MCPServer struct {
 	httpServer *http.Server
 	sseServer  *server.SSEServer
 	notifier   *server.NotificationSender
+	logger     *logging.Logger
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
 
+// MCPServerOption is a function option for MCPServer
+type MCPServerOption func(*MCPServer)
+
+// WithLogger sets the logger for the MCPServer
+func WithLogger(logger *logging.Logger) MCPServerOption {
+	return func(s *MCPServer) {
+		s.logger = logger
+	}
+}
+
 // NewMCPServer creates a new MCP server.
-func NewMCPServer(service *usecases.ServerService, addr string) *MCPServer {
+func NewMCPServer(service *usecases.ServerService, addr string, opts ...MCPServerOption) *MCPServer {
 	// Create root context for the server
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Create default logger
+	defaultLogger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stdout"},
+		InitialFields: logging.Fields{
+			"component": "mcp-server",
+		},
+	})
+	if err != nil {
+		// Fallback to a simple default logger if we can't create the structured one
+		defaultLogger = logging.Default()
+	}
 
 	notifier := server.NewNotificationSender(jsonRPCVersion)
 
 	s := &MCPServer{
 		service:  service,
 		notifier: notifier,
+		logger:   defaultLogger,
 		ctx:      ctx,
 		cancel:   cancel,
+	}
+
+	// Apply all options
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	// Create message handler function for the SSE server
@@ -64,12 +95,19 @@ func NewMCPServer(service *usecases.ServerService, addr string) *MCPServer {
 	}
 
 	// Create the SSE Server with MCP message handler and enhanced context handling
-	sseServer := server.NewSSEServer(notifier, mcpHandler,
+	sseOptions := []server.SSEOption{
 		server.WithMessageEndpoint("/message"),
 		server.WithSSEEndpoint("/sse"),
 		server.WithBasePath(""),
 		server.WithSSEContextFunc(contextFunc),
-	)
+	}
+
+	// If we have a logger, pass it to the SSE server
+	if s.logger != nil {
+		sseOptions = append(sseOptions, server.WithLogger(s.logger))
+	}
+
+	sseServer := server.NewSSEServer(notifier, mcpHandler, sseOptions...)
 
 	s.sseServer = sseServer
 
@@ -112,8 +150,8 @@ func (s *MCPServer) redirectToSSE(w http.ResponseWriter, r *http.Request) {
 
 // Start starts the MCP server.
 func (s *MCPServer) Start() error {
-	log.Printf("Starting MCP server on %s", s.httpServer.Addr)
-	log.Printf("Available endpoints: /, /jsonrpc, /sse, /message, /events, /status")
+	s.logger.Info("Starting MCP server", logging.Fields{"address": s.httpServer.Addr})
+	s.logger.Info("Available endpoints", logging.Fields{"endpoints": "/, /jsonrpc, /sse, /message, /events, /status"})
 	return s.httpServer.ListenAndServe()
 }
 
@@ -161,7 +199,7 @@ func (s *MCPServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 func (s *MCPServer) processInitialize(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	// Log initialization request
-	log.Printf("Processing initialize request")
+	s.logger.Info("Processing initialize request")
 
 	// Parse initialization parameters if needed
 	// ...
@@ -169,7 +207,7 @@ func (s *MCPServer) processInitialize(ctx context.Context, request domain.JSONRP
 	// Get server info
 	name, version, instructions := s.service.ServerInfo()
 
-	log.Printf("Server info: %s %s", name, version)
+	s.logger.Info("Server info", logging.Fields{"name": name, "version": version})
 
 	// Create response
 	result := map[string]interface{}{
@@ -197,29 +235,29 @@ func (s *MCPServer) processInitialize(ctx context.Context, request domain.JSONRP
 		result["instructions"] = instructions
 	}
 
-	log.Printf("Processed initialize response with protocol version %s", mcpProtocolVersion)
+	s.logger.Info("Processed initialize response", logging.Fields{"protocolVersion": mcpProtocolVersion})
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
 func (s *MCPServer) processPing(ctx context.Context, request domain.JSONRPCRequest) interface{} {
 	// Simple ping response
-	log.Printf("Processing ping request")
+	s.logger.Debug("Processing ping request")
 	return domain.CreateResponse(jsonRPCVersion, request.ID, struct{}{})
 }
 
 func (s *MCPServer) processResourcesList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
-	log.Printf("Processing resources/list request")
+	s.logger.Info("Processing resources/list request")
 
 	// Debug logging to verify service access
-	log.Printf("Service pointer: %p", s.service)
+	s.logger.Debug("Service access", logging.Fields{"servicePtr": fmt.Sprintf("%p", s.service)})
 
 	resources, err := s.service.ListResources(ctx)
 	if err != nil {
-		log.Printf("Error listing resources: %v", err)
+		s.logger.Error("Error listing resources", logging.Fields{"error": err})
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Internal error: %v", err))
 	}
 
-	log.Printf("Found %d resources in repository", len(resources))
+	s.logger.Info("Found resources", logging.Fields{"count": len(resources)})
 
 	// Convert domain resources to response format
 	resourceList := make([]map[string]interface{}, len(resources))
@@ -236,36 +274,36 @@ func (s *MCPServer) processResourcesList(ctx context.Context, request domain.JSO
 		"resources": resourceList,
 	}
 
-	log.Printf("Processed resources/list response with %d resources", len(resources))
+	s.logger.Info("Processed resources/list response", logging.Fields{"resourceCount": len(resources)})
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
 func (s *MCPServer) processResourcesRead(ctx context.Context, request domain.JSONRPCRequest) interface{} {
-	log.Printf("Processing resources/read request")
+	s.logger.Info("Processing resources/read request")
 
 	// Extract URI from parameters
 	params, ok := request.Params.(map[string]interface{})
 	if !ok {
-		log.Printf("Invalid params, expected map")
+		s.logger.Warn("Invalid params, expected map", logging.Fields{"paramsType": fmt.Sprintf("%T", request.Params)})
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32602, "Invalid params")
 	}
 
 	uri, ok := params["uri"].(string)
 	if !ok || uri == "" {
-		log.Printf("Missing or invalid 'uri' parameter")
+		s.logger.Warn("Missing or invalid 'uri' parameter")
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32602, "Missing or invalid 'uri' parameter")
 	}
 
-	log.Printf("Reading resource with URI: %s", uri)
+	s.logger.Info("Reading resource", logging.Fields{"uri": uri})
 
 	// Get resource
 	resource, err := s.service.GetResource(ctx, uri)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			log.Printf("Resource not found: %s", uri)
+			s.logger.Warn("Resource not found", logging.Fields{"uri": uri})
 			return domain.CreateErrorResponse(jsonRPCVersion, request.ID, 404, fmt.Sprintf("Resource not found: %s", uri))
 		} else {
-			log.Printf("Error getting resource: %v", err)
+			s.logger.Error("Error getting resource", logging.Fields{"uri": uri, "error": err})
 			return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Internal error: %v", err))
 		}
 	}
@@ -281,28 +319,32 @@ func (s *MCPServer) processResourcesRead(ctx context.Context, request domain.JSO
 		"contents": []interface{}{contents},
 	}
 
-	log.Printf("Processed resources/read response for URI: %s", uri)
+	s.logger.Info("Processed resources/read response", logging.Fields{"uri": uri})
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
 func (s *MCPServer) processToolsList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
-	log.Printf("Processing tools/list request")
+	s.logger.Info("Processing tools/list request")
 
 	// Debug logging to verify service access
-	log.Printf("Service pointer: %p", s.service)
+	s.logger.Debug("Service access", logging.Fields{"servicePtr": fmt.Sprintf("%p", s.service)})
 
 	tools, err := s.service.ListTools(ctx)
 	if err != nil {
-		log.Printf("Error listing tools: %v", err)
+		s.logger.Error("Error listing tools", logging.Fields{"error": err})
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Internal error: %v", err))
 	}
 
-	log.Printf("Found %d tools in repository", len(tools))
+	s.logger.Info("Found tools", logging.Fields{"count": len(tools)})
 
 	// Convert domain tools to response format
 	toolList := make([]map[string]interface{}, len(tools))
 	for i, tool := range tools {
-		log.Printf("Tool %d: %s - %s", i, tool.Name, tool.Description)
+		s.logger.Debug("Processing tool", logging.Fields{
+			"index": i,
+			"name":  tool.Name,
+			"desc":  tool.Description,
+		})
 
 		// Format parameters as an object with properties
 		parametersObj := make(map[string]interface{})
@@ -340,40 +382,43 @@ func (s *MCPServer) processToolsList(ctx context.Context, request domain.JSONRPC
 		"tools": toolList,
 	}
 
-	log.Printf("Processed tools/list response with %d tools", len(tools))
+	s.logger.Info("Processed tools/list response", logging.Fields{"toolCount": len(tools)})
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
 func (s *MCPServer) processToolsCall(ctx context.Context, request domain.JSONRPCRequest) interface{} {
-	log.Printf("Processing tools/call request: %+v", request)
+	s.logger.Info("Processing tools/call request", logging.Fields{"request": fmt.Sprintf("%+v", request)})
 
 	// Extract parameters
 	params, ok := request.Params.(map[string]interface{})
 	if !ok {
-		log.Printf("Invalid params, expected map: %T", request.Params)
+		s.logger.Warn("Invalid params, expected map", logging.Fields{"paramsType": fmt.Sprintf("%T", request.Params)})
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32602, "Invalid params")
 	}
 
 	// Get tool name
 	toolName, ok := params["name"].(string)
 	if !ok || toolName == "" {
-		log.Printf("Missing or invalid 'name' parameter")
+		s.logger.Warn("Missing or invalid 'name' parameter")
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32602, "Missing or invalid 'name' parameter")
 	}
 
 	// Get tool parameters - check for 'arguments' field instead of 'parameters'
 	toolParams, ok := params["arguments"].(map[string]interface{})
 	if !ok {
-		log.Printf("Invalid or missing 'arguments' field")
+		s.logger.Debug("Invalid or missing 'arguments' field")
 		toolParams = map[string]interface{}{}
 	}
 
-	log.Printf("Tool call request for tool '%s' with params: %+v", toolName, toolParams)
+	s.logger.Info("Tool call request", logging.Fields{
+		"tool":   toolName,
+		"params": fmt.Sprintf("%+v", toolParams),
+	})
 
 	// Get the tool
 	_, err := s.service.GetTool(ctx, toolName)
 	if err != nil {
-		log.Printf("Error getting tool '%s': %v", toolName, err)
+		s.logger.Error("Error getting tool", logging.Fields{"tool": toolName, "error": err})
 		if errors.Is(err, domain.ErrNotFound) {
 			return domain.CreateErrorResponse(jsonRPCVersion, request.ID, 404, fmt.Sprintf("Tool not found: %s", toolName))
 		} else {
@@ -389,7 +434,7 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request domain.JSONRPC
 		// Handle echo tool
 		messageVal, ok := toolParams["message"]
 		if !ok || messageVal == nil {
-			log.Printf("Missing or invalid 'message' parameter for echo tool")
+			s.logger.Warn("Missing or invalid 'message' parameter for echo tool")
 			return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32602, "Missing or invalid 'message' parameter")
 		}
 
@@ -421,19 +466,19 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request domain.JSONRPC
 		}
 
 	default:
-		log.Printf("Tool '%s' exists but handler not implemented", toolName)
+		s.logger.Warn("Tool handler not implemented", logging.Fields{"tool": toolName})
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Tool handler not implemented for: %s", toolName))
 	}
 
-	log.Printf("Processed tools/call response for tool '%s'", toolName)
+	s.logger.Info("Processed tools/call response", logging.Fields{"tool": toolName})
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
 func (s *MCPServer) processPromptsList(ctx context.Context, request domain.JSONRPCRequest) interface{} {
-	log.Printf("Processing prompts/list request")
+	s.logger.Info("Processing prompts/list request")
 	prompts, err := s.service.ListPrompts(ctx)
 	if err != nil {
-		log.Printf("Error listing prompts: %v", err)
+		s.logger.Error("Error listing prompts", logging.Fields{"error": err})
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Internal error: %v", err))
 	}
 
@@ -461,12 +506,12 @@ func (s *MCPServer) processPromptsList(ctx context.Context, request domain.JSONR
 		"prompts": promptList,
 	}
 
-	log.Printf("Processed prompts/list response with %d prompts", len(prompts))
+	s.logger.Info("Processed prompts/list response", logging.Fields{"promptCount": len(prompts)})
 	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
 }
 
 func (s *MCPServer) processPromptsGet(ctx context.Context, request domain.JSONRPCRequest) interface{} {
-	log.Printf("Processing prompts/get request")
+	s.logger.Info("Processing prompts/get request")
 	// TODO: Implement prompt get handler
 	return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, "Prompt get not implemented")
 }

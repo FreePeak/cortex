@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
 )
 
@@ -40,7 +41,7 @@ type StdioContextFunc func(ctx context.Context) context.Context
 // communicate via standard input/output streams using JSON-RPC messages.
 type StdioServer struct {
 	server      *rest.MCPServer
-	errLogger   *log.Logger
+	logger      *logging.Logger
 	contextFunc StdioContextFunc
 	processor   *MessageProcessor
 }
@@ -48,10 +49,10 @@ type StdioServer struct {
 // StdioOption defines a function type for configuring StdioServer
 type StdioOption func(*StdioServer)
 
-// WithErrorLogger sets the error logger for the server
-func WithErrorLogger(logger *log.Logger) StdioOption {
+// WithLogger sets the logger for the server
+func WithLogger(logger *logging.Logger) StdioOption {
 	return func(s *StdioServer) {
-		s.errLogger = logger
+		s.logger = logger
 	}
 }
 
@@ -64,12 +65,44 @@ func WithStdioContextFunc(fn StdioContextFunc) StdioOption {
 	}
 }
 
+// WithErrorLogger is kept for backwards compatibility
+// It will create a custom logger that wraps the standard log.Logger
+func WithErrorLogger(stdLogger *log.Logger) StdioOption {
+	return func(s *StdioServer) {
+		// Create a development logger that outputs to stderr
+		logger, err := logging.New(logging.Config{
+			Level:       logging.InfoLevel,
+			Development: true,
+			OutputPaths: []string{"stderr"},
+		})
+		if err != nil {
+			// If we can't create the logger, use the default one
+			return
+		}
+		s.logger = logger
+	}
+}
+
 // NewStdioServer creates a new stdio server wrapper around an MCPServer.
-// It initializes the server with a default error logger that logs to stderr.
+// It initializes the server with a default logger that logs to stderr.
 func NewStdioServer(server *rest.MCPServer, opts ...StdioOption) *StdioServer {
+	// Create default logger
+	defaultLogger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stderr"},
+		InitialFields: logging.Fields{
+			"component": "stdio-server",
+		},
+	})
+	if err != nil {
+		// Fallback to a simple default logger if we can't create the structured one
+		defaultLogger = logging.Default()
+	}
+
 	s := &StdioServer{
-		server:    server,
-		errLogger: log.New(os.Stderr, "[STDIO] ", log.LstdFlags),
+		server: server,
+		logger: defaultLogger,
 	}
 
 	// Apply all options
@@ -78,7 +111,7 @@ func NewStdioServer(server *rest.MCPServer, opts ...StdioOption) *StdioServer {
 	}
 
 	// Initialize the message processor
-	s.processor = NewMessageProcessor(s.server, s.errLogger)
+	s.processor = NewMessageProcessor(s.server, s.logger)
 
 	return s
 }
@@ -104,10 +137,10 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err == io.EOF {
-					s.errLogger.Println("Input stream closed")
+					s.logger.Info("Input stream closed")
 					return nil
 				}
-				s.errLogger.Printf("Error reading input: %v", err)
+				s.logger.Error("Error reading input", logging.Fields{"error": err})
 				return err
 			}
 
@@ -120,12 +153,12 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 					return processErr
 				}
 
-				s.errLogger.Printf("Error processing message: %v", processErr)
+				s.logger.Error("Error processing message", logging.Fields{"error": processErr})
 
 				// If we have a response (error response), send it
 				if response != nil {
 					if err := s.writeResponse(response, stdout); err != nil {
-						s.errLogger.Printf("Error writing error response: %v", err)
+						s.logger.Error("Error writing error response", logging.Fields{"error": err})
 						if isTerminalError(err) {
 							return err
 						}
@@ -139,7 +172,7 @@ func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Wri
 			// Send successful response if we have one
 			if response != nil {
 				if err := s.writeResponse(response, stdout); err != nil {
-					s.errLogger.Printf("Error writing response: %v", err)
+					s.logger.Error("Error writing response", logging.Fields{"error": err})
 					if isTerminalError(err) {
 						return err
 					}
@@ -187,27 +220,27 @@ func ServeStdio(server *rest.MCPServer, opts ...StdioOption) error {
 
 	go func() {
 		sig := <-sigChan
-		s.errLogger.Printf("Received shutdown signal %v, stopping server...", sig)
+		s.logger.Info("Received shutdown signal, stopping server...", logging.Fields{"signal": sig.String()})
 		cancel()
 	}()
 
-	s.errLogger.Println("Starting MCP server in stdio mode")
+	s.logger.Info("Starting MCP server in stdio mode")
 
 	err := s.Listen(ctx, os.Stdin, os.Stdout)
 	if err != nil && err != context.Canceled {
-		s.errLogger.Printf("Server exited with error: %v", err)
+		s.logger.Error("Server exited with error", logging.Fields{"error": err})
 		return err
 	}
 
-	s.errLogger.Println("Server shutdown complete")
+	s.logger.Info("Server shutdown complete")
 	return nil
 }
 
 // MessageProcessor handles JSON-RPC message processing
 type MessageProcessor struct {
-	server    *rest.MCPServer
-	errLogger *log.Logger
-	handlers  map[string]MethodHandler
+	server   *rest.MCPServer
+	logger   *logging.Logger
+	handlers map[string]MethodHandler
 }
 
 // MethodHandler defines the interface for JSON-RPC method handlers
@@ -224,11 +257,11 @@ func (f MethodHandlerFunc) Handle(ctx context.Context, params interface{}, id in
 }
 
 // NewMessageProcessor creates a new message processor with registered handlers
-func NewMessageProcessor(server *rest.MCPServer, logger *log.Logger) *MessageProcessor {
+func NewMessageProcessor(server *rest.MCPServer, logger *logging.Logger) *MessageProcessor {
 	p := &MessageProcessor{
-		server:    server,
-		errLogger: logger,
-		handlers:  make(map[string]MethodHandler),
+		server:   server,
+		logger:   logger,
+		handlers: make(map[string]MethodHandler),
 	}
 
 	// Register standard handlers
@@ -272,7 +305,7 @@ func (p *MessageProcessor) Process(ctx context.Context, message string) (interfa
 	// Check if this is a notification (no ID field)
 	// Notifications don't require responses
 	if baseMessage.ID == nil && strings.HasPrefix(baseMessage.Method, "notifications/") {
-		p.errLogger.Printf("Received notification: %s", baseMessage.Method)
+		p.logger.Info("Received notification", logging.Fields{"method": baseMessage.Method})
 		// Process notification but don't return a response
 		return nil, nil
 	}
@@ -282,7 +315,7 @@ func (p *MessageProcessor) Process(ctx context.Context, message string) (interfa
 
 	// Handle notifications with a prefix
 	if !exists && strings.HasPrefix(baseMessage.Method, "notifications/") {
-		p.errLogger.Printf("Processed notification: %s", baseMessage.Method)
+		p.logger.Info("Processed notification", logging.Fields{"method": baseMessage.Method})
 		return nil, nil
 	}
 
