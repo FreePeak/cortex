@@ -12,11 +12,19 @@ import (
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
 )
 
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+// Context keys
+const (
+	timestampKey contextKey = "timestamp"
+)
+
 // Create a custom context function that adds a timestamp
 func withTimestamp(ctx context.Context) context.Context {
 	// Log when the context function is called - we'll use the logger
 	// that will be attached to the context later
-	return context.WithValue(ctx, "timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	return context.WithValue(ctx, timestampKey, fmt.Sprintf("%d", time.Now().Unix()))
 }
 
 func main() {

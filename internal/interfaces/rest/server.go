@@ -127,7 +127,7 @@ func NewMCPServer(service *usecases.ServerService, addr string, opts ...MCPServe
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		name, version, _ := service.ServerInfo()
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":   "ok",
 			"name":     name,
 			"version":  version,
@@ -192,7 +192,7 @@ func (s *MCPServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 	// Send response
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // Helper methods for processing specific JSON-RPC methods

@@ -322,7 +322,7 @@ func (s *sseHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 			// Also send HTTP response
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write(responseBytes)
+			_, _ = w.Write(responseBytes)
 		} else {
 			// It's a notification (no ID) - just send 202 Accepted
 			w.WriteHeader(http.StatusAccepted)
@@ -331,16 +331,6 @@ func (s *sseHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 		// No response (empty result)
 		w.WriteHeader(http.StatusAccepted)
 	}
-}
-
-// Helper function to get the request ID from a JSON-RPC request
-func getRequestID(request map[string]interface{}) (interface{}, bool) {
-	if request == nil {
-		return nil, false
-	}
-
-	id, hasID := request["id"]
-	return id, hasID
 }
 
 // Helper methods for path handling
@@ -363,5 +353,14 @@ func writeJSONRPCError(
 ) {
 	w.Header().Set("Content-Type", "application/json")
 	errResp := domain.CreateErrorResponse(jsonrpcVersion, id, code, message)
-	json.NewEncoder(w).Encode(errResp)
+	_ = json.NewEncoder(w).Encode(errResp)
 }
+
+/* Commented out as unused currently
+func getRequestID(request map[string]interface{}) (interface{}, bool) {
+	if id, ok := request["id"]; ok {
+		return id, true
+	}
+	return nil, false
+}
+*/

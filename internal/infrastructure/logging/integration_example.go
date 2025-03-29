@@ -5,48 +5,52 @@ package logging
 import (
 	"context"
 	"net/http"
-	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
 )
 
-// LoggingMiddleware creates an HTTP middleware that logs requests
-func LoggingMiddleware(logger *Logger) func(http.Handler) http.Handler {
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+// Defined context keys
+const (
+	loggerKey contextKey = "logger"
+)
+
+// Middleware creates an HTTP middleware that adds a logger to the request context.
+func Middleware(logger *Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
+			// Create a child logger with request information
+			requestLogger := logger.With(Fields{
+				"method": r.Method,
+				"path":   r.URL.Path,
+				"remote": r.RemoteAddr,
+			})
 
-			// Create context with logger
-			ctx := context.WithValue(r.Context(), "logger", logger)
+			// Add logger to context
+			ctx := context.WithValue(r.Context(), loggerKey, requestLogger)
 
-			// Call the next handler with the enhanced context
+			// Call next handler with updated context
 			next.ServeHTTP(w, r.WithContext(ctx))
-
-			// Log request details
-			logger.Info("HTTP Request",
-				Fields{
-					"method":      r.Method,
-					"path":        r.URL.Path,
-					"remote_addr": r.RemoteAddr,
-					"user_agent":  r.UserAgent(),
-					"duration_ms": time.Since(start).Milliseconds(),
-				})
 		})
 	}
 }
 
-// GetLoggerFromContext extracts logger from context
-func GetLoggerFromContext(ctx context.Context) *Logger {
-	if logger, ok := ctx.Value("logger").(*Logger); ok {
-		return logger
+// GetLogger retrieves the logger from the context.
+// If no logger is found, returns a default logger.
+func GetLogger(ctx context.Context) *Logger {
+	logger, ok := ctx.Value(loggerKey).(*Logger)
+	if !ok || logger == nil {
+		// Return default logger if not found in context
+		return Default()
 	}
-	// Return default logger if not found in context
-	return Default()
+	return logger
 }
 
 // LogJSONRPCRequest logs JSON-RPC request details
 func LogJSONRPCRequest(ctx context.Context, request domain.JSONRPCRequest) {
-	logger := GetLoggerFromContext(ctx)
+	logger := GetLogger(ctx)
 
 	logger.Info("JSON-RPC Request",
 		Fields{
@@ -58,7 +62,7 @@ func LogJSONRPCRequest(ctx context.Context, request domain.JSONRPCRequest) {
 
 // LogJSONRPCResponse logs JSON-RPC response details
 func LogJSONRPCResponse(ctx context.Context, response domain.JSONRPCResponse) {
-	logger := GetLoggerFromContext(ctx)
+	logger := GetLogger(ctx)
 
 	fields := Fields{
 		"id":      response.ID,

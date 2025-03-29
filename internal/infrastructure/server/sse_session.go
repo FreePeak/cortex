@@ -93,7 +93,7 @@ func (s *sseSession2) Start() {
 			return
 		case event := <-s.eventQueue:
 			// Write the event directly to the response
-			s.writer.Write([]byte(event))
+			_, _ = s.writer.Write([]byte(event))
 			s.flusher.Flush()
 		case notification := <-s.notifChan:
 			// Handle notifications from the MCP server
@@ -101,7 +101,7 @@ func (s *sseSession2) Start() {
 			// Converting notification to SSE event format
 			event, err := json.Marshal(notification)
 			if err == nil {
-				s.writer.Write([]byte(fmt.Sprintf("event: message\ndata: %s\n\n", event)))
+				_, _ = s.writer.Write([]byte(fmt.Sprintf("event: message\ndata: %s\n\n", event)))
 				s.flusher.Flush()
 			}
 		}

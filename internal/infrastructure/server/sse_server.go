@@ -451,7 +451,7 @@ func (s *SSEServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 		// Send HTTP response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	} else {
 		// For notifications, just send 202 Accepted with no body
 		w.WriteHeader(http.StatusAccepted)
@@ -475,7 +475,7 @@ func (s *SSEServer) writeJSONRPCError(
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // SendEventToSession sends an event to a specific SSE session identified by sessionID.
