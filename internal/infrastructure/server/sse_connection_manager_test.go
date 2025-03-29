@@ -209,7 +209,8 @@ func TestSSEConnectionManager_BroadcastToClosedSession(t *testing.T) {
 
 	// Now broadcast should succeed without panicking
 	assert.NotPanics(t, func() {
-		mgr.Broadcast(map[string]string{"data": "test"})
+		err := mgr.Broadcast(map[string]string{"data": "test"})
+		assert.NoError(t, err)
 	})
 }
 

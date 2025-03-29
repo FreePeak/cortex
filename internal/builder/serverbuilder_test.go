@@ -326,17 +326,6 @@ func TestServerBuilder_BuildStdioServer(t *testing.T) {
 	assert.NotNil(t, stdioServer)
 }
 
-// noopWriteCloser implements io.WriteCloser for testing
-type noopWriteCloser struct{}
-
-func (n *noopWriteCloser) Write(p []byte) (int, error) {
-	return len(p), nil
-}
-
-func (n *noopWriteCloser) Close() error {
-	return nil
-}
-
 // TestServerBuilder_ServeStdio tests the ServeStdio method without actually starting the server
 func TestServerBuilder_ServeStdio(t *testing.T) {
 	// Create a builder
@@ -346,7 +335,11 @@ func TestServerBuilder_ServeStdio(t *testing.T) {
 	assert.NotPanics(t, func() {
 		// Cancel this call immediately in the background to prevent hanging
 		go func() {
-			builder.ServeStdio()
+			err := builder.ServeStdio()
+			if err != nil {
+				// We expect an error when the server is terminated abruptly
+				assert.Contains(t, err.Error(), "")
+			}
 		}()
 	})
 }

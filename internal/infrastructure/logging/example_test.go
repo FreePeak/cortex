@@ -13,7 +13,9 @@ func Example() {
 	if err != nil {
 		panic(err)
 	}
-	defer logger.Sync()
+	defer func() {
+		_ = logger.Sync() // Intentionally ignoring sync errors in examples
+	}()
 
 	// Simple logging
 	logger.Debug("Debug message")
@@ -71,7 +73,9 @@ func Example_customConfig() {
 	if err != nil {
 		panic(err)
 	}
-	defer logger.Sync()
+	defer func() {
+		_ = logger.Sync() // Intentionally ignoring sync errors in examples
+	}()
 
 	logger.Info("Application started")
 }
@@ -82,7 +86,9 @@ func Example_productionLogger() {
 	if err != nil {
 		panic(err)
 	}
-	defer logger.Sync()
+	defer func() {
+		_ = logger.Sync() // Intentionally ignoring sync errors in examples
+	}()
 
 	// Production loggers typically use JSON format
 	// and have DEBUG level disabled

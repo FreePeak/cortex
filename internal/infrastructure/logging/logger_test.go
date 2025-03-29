@@ -61,7 +61,9 @@ func newTestLogger(t *testing.T) (*Logger, *bytes.Buffer) {
 
 func TestLoggerLevels(t *testing.T) {
 	testLogger, buf := newTestLogger(t)
-	defer testLogger.Sync()
+	defer func() {
+		_ = testLogger.Sync() // Intentionally ignoring sync errors in tests
+	}()
 
 	// Log messages at different levels
 	testLogger.Debug("debug message")
@@ -101,7 +103,9 @@ func TestLoggerLevels(t *testing.T) {
 
 func TestLoggerWithFields(t *testing.T) {
 	testLogger, buf := newTestLogger(t)
-	defer testLogger.Sync()
+	defer func() {
+		_ = testLogger.Sync() // Intentionally ignoring sync errors in tests
+	}()
 
 	// Log with fields
 	testLogger.Info("user login", Fields{
@@ -121,7 +125,9 @@ func TestLoggerWithFields(t *testing.T) {
 
 func TestLoggerWithContext(t *testing.T) {
 	testLogger, buf := newTestLogger(t)
-	defer testLogger.Sync()
+	defer func() {
+		_ = testLogger.Sync() // Intentionally ignoring sync errors in tests
+	}()
 
 	// Create context
 	ctx := context.Background()

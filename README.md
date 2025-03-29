@@ -2,6 +2,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Go Report Card](https://goreportcard.com/badge/github.com/FreePeak/golang-mcp-server-sdk)](https://goreportcard.com/report/github.com/FreePeak/golang-mcp-server-sdk)
 [![Go Reference](https://pkg.go.dev/badge/github.com/FreePeak/golang-mcp-server-sdk.svg)](https://pkg.go.dev/github.com/FreePeak/golang-mcp-server-sdk)
+[![Build Status](https://github.com/FreePeak/golang-mcp-server-sdk/actions/workflows/go.yml/badge.svg)](https://github.com/FreePeak/golang-mcp-server-sdk/actions/workflows/go.yml)
 [![Contributors](https://img.shields.io/github/contributors/FreePeak/golang-mcp-server-sdk)](https://github.com/FreePeak/golang-mcp-server-sdk/graphs/contributors)
 ## Table of Contents
 - [Overview](#overview)
