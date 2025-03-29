@@ -27,7 +27,7 @@ example-stdio:
 	cd echo-stdio-test && go run main.go
 
 test:
-	$(GOTEST) -v ./...
+	$(GOTEST) ./... -cover
 
 coverage:
 	$(GOTEST) -cover -coverprofile=coverage.out ./...

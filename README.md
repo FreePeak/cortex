@@ -16,13 +16,12 @@
 - [Running Your Server](#running-your-server)
   - [stdio](#stdio)
   - [HTTP with SSE](#http-with-sse)
-  - [WebSockets](#websockets)
   - [Multi-Protocol](#multi-protocol)
   - [Testing and Debugging](#testing-and-debugging)
 - [Examples](#examples)
   - [Echo Server](#echo-server)
 - [Advanced Usage](#advanced-usage)
-  - [Low-Level Server](#low-level-server)
+  - [Builder Pattern](#builder-pattern)
   - [Clean Architecture](#clean-architecture)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
@@ -33,7 +32,7 @@
 The Model Context Protocol allows applications to provide context for LLMs in a standardized way, separating the concerns of providing context from the actual LLM interaction. This Golang SDK implements the full MCP specification, making it easy to:
 
 - Build MCP servers that expose resources, prompts and tools
-- Use standard transports like stdio, SSE, and WebSockets
+- Use standard transports like stdio and Server-Sent Events (SSE)
 - Handle all MCP protocol messages and lifecycle events
 - Follow Go best practices and clean architecture principles
 
@@ -54,22 +53,31 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
 )
 
 func main() {
 	// Configure logger
-	logger := log.New(os.Stderr, "[ECHO-SERVER] ", log.LstdFlags)
-	
-	// Create the echo tool
+	logger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stderr"},
+		InitialFields: logging.Fields{
+			"component": "echo-stdio",
+		},
+	})
+	if err != nil {
+		os.Exit(1)
+	}
+
+	// Create the echo tool definition
 	echoTool := &domain.Tool{
-		Name:        "echo",
+		Name:        "echo_golang_mcp_server_stdio",
 		Description: "Echoes back the input message",
 		Parameters: []domain.ToolParameter{
 			{
@@ -81,25 +89,23 @@ func main() {
 		},
 	}
 
-	// Create tool repository
-	toolRepo := server.NewInMemoryToolRepository()
+	// Use the server builder pattern
 	ctx := context.Background()
-	toolRepo.AddTool(ctx, echoTool)
-
-	// Create server service
-	serviceConfig := usecases.ServerConfig{
-		Name:     "Echo Server",
-		Version:  "1.0.0",
-		ToolRepo: toolRepo,
-	}
-	service := usecases.NewServerService(serviceConfig)
-
-	// Create MCP server
-	mcpServer := stdio.NewStdioServer(service, logger)
+	serverBuilder := builder.NewServerBuilder().
+		WithName("Echo Stdio Server").
+		WithVersion("1.0.0").
+		WithInstructions("This is a simple echo server that echoes back messages sent to it.").
+		AddTool(ctx, echoTool)
 
 	// Start the stdio server
-	if err := mcpServer.Serve(); err != nil {
-		logger.Fatalf("Error serving: %v", err)
+	logger.Info("Server ready. You can now send JSON-RPC requests via stdin.")
+	err = serverBuilder.ServeStdio(
+		stdio.WithLogger(logger),
+	)
+
+	if err != nil {
+		logger.Error("Error serving stdio", logging.Fields{"error": err})
+		os.Exit(1)
 	}
 }
 ```
@@ -111,21 +117,19 @@ The [Model Context Protocol (MCP)](https://modelcontextprotocol.io) is a standar
 - Expose data through **Resources** (read-only data endpoints)
 - Provide functionality through **Tools** (executable functions)
 - Define interaction patterns through **Prompts** (reusable templates)
-- Support various transport methods (stdio, HTTP/SSE, WebSockets)
+- Support various transport methods (stdio, HTTP/SSE)
 
 ## Core Concepts
 
 ### Server
 
-The MCP Server is your core interface to the MCP protocol. It handles connection management, protocol compliance, and message routing:
+The MCP Server is your core interface to the MCP protocol. It handles connection management, protocol compliance, and message routing. With our builder pattern, you can easily configure your server:
 
 ```go
-serviceConfig := usecases.ServerConfig{
-	Name:     "My App",
-	Version:  "1.0.0",
-	ToolRepo: toolRepo,
-}
-service := usecases.NewServerService(serviceConfig)
+serverBuilder := builder.NewServerBuilder().
+    WithName("My App").
+    WithVersion("1.0.0").
+    WithInstructions("Custom instructions for the LLM about how to interact with your server")
 ```
 
 ### Resources
@@ -133,20 +137,16 @@ service := usecases.NewServerService(serviceConfig)
 Resources are how you expose data to LLMs. They're similar to GET endpoints in a REST API - they provide data but shouldn't perform significant computation or have side effects:
 
 ```go
-// Create resource repository
-resourceRepo := server.NewInMemoryResourceRepository()
-
-// Add a static resource
+// Create a resource
 resource := &domain.Resource{
-	Name:        "config",
-	Description: "Application configuration",
-	Uri:         "config://app",
-	Content:     "App configuration data goes here",
+    URI:         "sample://hello-world",
+    Name:        "Hello World Resource",
+    Description: "A sample resource for demonstration purposes",
+    MIMEType:    "text/plain",
 }
-resourceRepo.AddResource(ctx, resource)
 
-// Add resource repository to server config
-serviceConfig.ResourceRepo = resourceRepo
+// Add it to the server builder
+serverBuilder.AddResource(ctx, resource)
 ```
 
 ### Tools
@@ -154,53 +154,57 @@ serviceConfig.ResourceRepo = resourceRepo
 Tools let LLMs take actions through your server. Unlike resources, tools are expected to perform computation and have side effects:
 
 ```go
-// Define a simple calculator tool
+// Define a calculator tool
 calculatorTool := &domain.Tool{
-	Name:        "calculate",
-	Description: "Performs basic arithmetic",
-	Parameters: []domain.ToolParameter{
-		{
-			Name:        "operation",
-			Description: "The operation to perform (add, subtract, multiply, divide)",
-			Type:        "string",
-			Required:    true,
-		},
-		{
-			Name:        "a",
-			Description: "First number",
-			Type:        "number",
-			Required:    true,
-		},
-		{
-			Name:        "b",
-			Description: "Second number",
-			Type:        "number",
-			Required:    true,
-		},
-	},
+    Name:        "calculate",
+    Description: "Performs basic arithmetic",
+    Parameters: []domain.ToolParameter{
+        {
+            Name:        "operation",
+            Description: "The operation to perform (add, subtract, multiply, divide)",
+            Type:        "string",
+            Required:    true,
+        },
+        {
+            Name:        "a", 
+            Description: "First number",
+            Type:        "number",
+            Required:    true,
+        },
+        {
+            Name:        "b",
+            Description: "Second number",
+            Type:        "number",
+            Required:    true,
+        },
+    },
 }
 
-// Add tool implementation
+// Add tool to server builder
+serverBuilder.AddTool(ctx, calculatorTool)
+
+// Register tool handler after building the service
+service := serverBuilder.BuildService()
 service.RegisterToolHandler("calculate", func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-	operation := params["operation"].(string)
-	a := params["a"].(float64)
-	b := params["b"].(float64)
-	
-	var result float64
-	switch operation {
-	case "add":
-		result = a + b
-	case "subtract":
-		result = a - b
-	case "multiply":
-		result = a * b
-	case "divide":
-		result = a / b
-	default:
-		return nil, fmt.Errorf("unknown operation: %s", operation)
-	}
-	
-	return result, nil
+    operation := params["operation"].(string)
+    a := params["a"].(float64)
+    b := params["b"].(float64)
+    
+    var result float64
+    switch operation {
+    case "add":
+        result = a + b
+    case "subtract":
+        result = a - b
+    case "multiply":
+        result = a * b
+    case "divide":
+        result = a / b
+    default:
+        return nil, fmt.Errorf("unknown operation: %s", operation)
+    }
+    
+    return result, nil
 })
 ```
 
@@ -209,27 +213,23 @@ service.RegisterToolHandler("calculate", func(ctx context.Context, params map[st
 Prompts are reusable templates that help LLMs interact with your server effectively:
 
 ```go
-// Create prompt repository
-promptRepo := server.NewInMemoryPromptRepository()
-
-// Add a code review prompt
+// Create a prompt for code review
 codeReviewPrompt := &domain.Prompt{
-	Name:        "review-code",
-	Description: "A prompt for code review",
-	Template:    "Please review this code:\n\n{{.code}}",
-	Parameters: []domain.PromptParameter{
-		{
-			Name:        "code",
-			Description: "The code to review",
-			Type:        "string",
-			Required:    true,
-		},
-	},
+    Name:        "review-code",
+    Description: "A prompt for code review",
+    Template:    "Please review this code:\n\n{{.code}}",
+    Parameters: []domain.PromptParameter{
+        {
+            Name:        "code",
+            Description: "The code to review",
+            Type:        "string",
+            Required:    true,
+        },
+    },
 }
-promptRepo.AddPrompt(ctx, codeReviewPrompt)
 
-// Add prompt repository to server config
-serviceConfig.PromptRepo = promptRepo
+// Add prompt to server builder
+serverBuilder.AddPrompt(ctx, codeReviewPrompt)
 ```
 
 ## Running Your Server
@@ -241,52 +241,29 @@ MCP servers in Go can be connected to different transports depending on your use
 For command-line tools and direct integrations:
 
 ```go
-import (
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
+// Configure and start a stdio server using the builder
+err := serverBuilder.ServeStdio(
+    stdio.WithLogger(logger),
+    stdio.WithStdioContextFunc(customContextFunction),
 )
-
-// Create stdio server
-stdioServer := stdio.NewStdioServer(service, logger)
-
-// Start the stdio server
-if err := stdioServer.Serve(); err != nil {
-	logger.Fatalf("Error serving: %v", err)
-}
 ```
 
 ### HTTP with SSE
 
-For remote servers, start a web server with a Server-Sent Events (SSE) endpoint:
+For web applications, you can use Server-Sent Events (SSE) for real-time communication:
 
 ```go
-import (
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
-)
+// Build an MCP server with SSE support
+mcpServer := serverBuilder.BuildMCPServer()
 
-// Create HTTP server with SSE support
-httpServer := rest.NewMCPServer(service, ":8080")
-
-// Start the HTTP server
-if err := httpServer.Serve(); err != nil {
-	logger.Fatalf("Error serving: %v", err)
+// Start the server
+if err := mcpServer.Start(); err != nil {
+    logger.Fatal("Server failed to start", logging.Fields{"error": err})
 }
-```
 
-### WebSockets
-
-For bidirectional communication:
-
-```go
-import (
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/ws"
-)
-
-// Create WebSocket server
-wsServer := ws.NewWebSocketServer(service, ":8081")
-
-// Start the WebSocket server
-if err := wsServer.Serve(); err != nil {
-	logger.Fatalf("Error serving: %v", err)
+// For graceful shutdown
+if err := mcpServer.Stop(ctx); err != nil {
+    logger.Fatal("Server forced to shutdown", logging.Fields{"error": err})
 }
 ```
 
@@ -295,28 +272,19 @@ if err := wsServer.Serve(); err != nil {
 You can also run multiple protocol servers simultaneously:
 
 ```go
-import (
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
-)
+// Create a multi-protocol server
+serverBuilder := builder.NewServerBuilder().
+    WithName("Multi-Protocol Server").
+    WithVersion("1.0.0").
+    WithAddress(":8080").  // For HTTP/SSE server
+    AddTool(ctx, echoTool)
 
-// Create a multi-protocol server builder
-serverBuilder := builder.NewServerBuilder(service)
+// For HTTP mode
+mcpServer := serverBuilder.BuildMCPServer()
+go startHTTPServer(mcpServer, logger)
 
-// Add protocols
-serverBuilder.WithStdio(logger)
-serverBuilder.WithSSE(":8080")
-serverBuilder.WithWebSocket(":8081")
-
-// Build and run the server
-multiServer, err := serverBuilder.Build()
-if err != nil {
-	logger.Fatalf("Error building server: %v", err)
-}
-
-// Start all servers
-if err := multiServer.Serve(); err != nil {
-	logger.Fatalf("Error serving: %v", err)
-}
+// For StdIO mode (in the same application)
+err := serverBuilder.ServeStdio(stdio.WithErrorLogger(logger))
 ```
 
 ### Testing and Debugging
@@ -329,28 +297,41 @@ Check out the `cmd` directory for complete example servers:
 
 ### Echo Server
 
-A simple server demonstrating tools functionality:
+A simple echo server with SSE support:
 
 ```go
 package main
 
 import (
 	"context"
-	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
 )
 
 func main() {
-	logger := log.New(os.Stderr, "[ECHO] ", log.LstdFlags)
-	
+	// Configure logger
+	logger, err := logging.New(logging.Config{
+		Level:       logging.InfoLevel,
+		Development: true,
+		OutputPaths: []string{"stdout"},
+		InitialFields: logging.Fields{
+			"component": "echo-sse",
+		},
+	})
+	if err != nil {
+		os.Exit(1)
+	}
+
 	// Create the echo tool
 	echoTool := &domain.Tool{
-		Name:        "echo",
+		Name:        "mcp_golang_mcp_server_sse_echo",
 		Description: "Echoes back the input message",
 		Parameters: []domain.ToolParameter{
 			{
@@ -362,75 +343,80 @@ func main() {
 		},
 	}
 
-	// Create tool repository
-	toolRepo := server.NewInMemoryToolRepository()
+	// Create a sample resource
+	sampleResource := &domain.Resource{
+		URI:         "sample://hello-world",
+		Name:        "Hello World Resource",
+		Description: "A sample resource for demonstration purposes",
+		MIMEType:    "text/plain",
+	}
+
+	// Use the builder pattern to create the server
 	ctx := context.Background()
-	toolRepo.AddTool(ctx, echoTool)
+	serverBuilder := builder.NewServerBuilder().
+		WithName("Echo SSE Server").
+		WithVersion("1.0.0").
+		WithInstructions("This is a simple echo server that echoes back messages sent to it.").
+		WithAddress(":8080").
+		AddTool(ctx, echoTool).
+		AddResource(ctx, sampleResource)
 
-	// Create server service
-	serviceConfig := usecases.ServerConfig{
-		Name:     "Echo Server",
-		Version:  "1.0.0",
-		ToolRepo: toolRepo,
+	// Build the MCP server with logger
+	service := serverBuilder.BuildService()
+	mcpServer := rest.NewMCPServer(service, ":8080", rest.WithLogger(logger))
+
+	// Start server in a goroutine
+	go func() {
+		if err := mcpServer.Start(); err != nil {
+			if err.Error() != "http: Server closed" {
+				logger.Fatal("Server failed to start", logging.Fields{"error": err})
+			}
+		}
+	}()
+
+	// Handle graceful shutdown
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+
+	// Wait for shutdown signal
+	<-shutdown
+	logger.Info("Shutting down server...")
+
+	// Create a context with timeout for shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Shutdown server
+	if err := mcpServer.Stop(ctx); err != nil {
+		logger.Fatal("Server forced to shutdown", logging.Fields{"error": err})
 	}
-	service := usecases.NewServerService(serviceConfig)
-	
-	// Register tool handler
-	service.RegisterToolHandler("echo", func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-		message := params["message"].(string)
-		return message, nil
-	})
 
-	// Create stdio server
-	stdioServer := stdio.NewStdioServer(service, logger)
-
-	// Start the stdio server
-	if err := stdioServer.Serve(); err != nil {
-		logger.Fatalf("Error serving: %v", err)
-	}
+	logger.Info("Server stopped gracefully")
 }
 ```
 
 ## Advanced Usage
 
-### Low-Level Server
+### Builder Pattern
 
-For more control, you can use the low-level server interfaces directly:
+The SDK provides a convenient builder pattern to configure and create your MCP server:
 
 ```go
-import (
-	"context"
-	"encoding/json"
-	"log"
+serverBuilder := builder.NewServerBuilder().
+    WithName("My Advanced App").
+    WithVersion("1.0.0").
+    WithInstructions("Detailed instructions for using this MCP server").
+    WithAddress(":8080").
+    AddTool(ctx, myTool).
+    AddResource(ctx, myResource).
+    AddPrompt(ctx, myPrompt)
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/protocol"
-)
+// For a stdio server
+serverBuilder.ServeStdio()
 
-func handleRequest(ctx context.Context, request []byte) ([]byte, error) {
-	var mcpRequest protocol.Request
-	if err := json.Unmarshal(request, &mcpRequest); err != nil {
-		return nil, err
-	}
-
-	// Process the request based on method
-	switch mcpRequest.Method {
-	case "capabilities":
-		response := protocol.CapabilitiesResponse{
-			JSONRPC: "2.0",
-			ID:      mcpRequest.ID,
-			Result: protocol.Capabilities{
-				Resources: &protocol.ResourceCapabilities{},
-				Tools:     &protocol.ToolCapabilities{},
-			},
-		}
-		return json.Marshal(response)
-		
-	// Handle other methods similarly
-	default:
-		return nil, fmt.Errorf("unknown method: %s", mcpRequest.Method)
-	}
-}
+// Or for an HTTP/SSE server
+mcpServer := serverBuilder.BuildMCPServer()
+mcpServer.Start()
 ```
 
 ### Clean Architecture
