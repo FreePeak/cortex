@@ -125,49 +125,33 @@ func TestNotificationSender_SendNotification_SessionNotFound(t *testing.T) {
 }
 
 // Test SendNotification - Channel full or closed
-func TestNotificationSender_SendNotification_ChannelFullOrClosed(t *testing.T) { // Renamed for clarity
+func TestNotificationSender_SendNotification_ChannelFullOrClosed(t *testing.T) {
 	sender := NewNotificationSender(testJsonrpcVersion)
 	sessionID := "full-channel-session"
 	session := NewMCPSession(sessionID, "agent", 0) // Buffer size 0 - will block immediately
 	sender.RegisterSession(session)
-	// Do not start a receiver goroutine
 
 	notification := &domain.Notification{Method: "test"}
-	ctx := context.Background()
 
-	sendAttempted := make(chan struct{}) // Channel to signal send attempt
-	var wg sync.WaitGroup
-	var err error
-	wg.Add(1)
+	// Create a context with timeout to avoid test hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 
+	// Now unregister the session in a separate goroutine
+	// This will cause the channel to close while SendNotification is potentially trying to send
 	go func() {
-		defer wg.Done()
-		// Signal that we are about to attempt the send, potentially blocking
-		close(sendAttempted)
-		// This send will block because the channel is unbuffered and no one is reading.
-		// It will error out when the channel is closed by UnregisterSession.
-		err = sender.SendNotification(ctx, sessionID, notification)
+		// Give a short delay to let SendNotification start
+		time.Sleep(10 * time.Millisecond)
+		sender.UnregisterSession(sessionID)
 	}()
 
-	// Wait until the goroutine signals it's attempting the send
-	<-sendAttempted
+	// This should fail with an error either because the channel is full or closed
+	err := sender.SendNotification(ctx, sessionID, notification)
 
-	// Give the send a very brief moment to potentially enter the blocking select case within SendNotification.
-	// This helps ensure the send is actually blocked before we close the channel.
-	// Still a small timing element, but more targeted than the previous fixed sleep.
-	time.Sleep(5 * time.Millisecond)
-
-	// Now unregister the session, which closes the channel, causing the blocked send to error out.
-	sender.UnregisterSession(sessionID)
-
-	wg.Wait() // Wait for the SendNotification goroutine to finish
-
-	require.Error(t, err, "Expected an error when sending to a closed/full channel")
-	// Check that the error message indicates the problem, potentially mentioning the session.
-	// The exact wording might depend on SendNotification's internal error handling (e.g., context vs channel state).
-	assert.Contains(t, err.Error(), sessionID, "Error message should ideally mention the session ID")
-	// Example of a more specific check if the error is known:
-	// assert.Contains(t, err.Error(), "channel closed", "Error message should indicate channel closure")
+	require.Error(t, err)
+	// The error might be either about a full channel or a closed channel
+	// depending on timing, but it should mention the session ID
+	assert.Contains(t, err.Error(), sessionID)
 }
 
 // Test SendNotification - Context cancelled

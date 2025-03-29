@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 type mockResponseWriterFlusher struct {
 	*httptest.ResponseRecorder
 	flushed bool
+	mu      sync.Mutex
 }
 
 func newMockResponseWriterFlusher() *mockResponseWriterFlusher {
@@ -24,7 +27,41 @@ func newMockResponseWriterFlusher() *mockResponseWriterFlusher {
 }
 
 func (m *mockResponseWriterFlusher) Flush() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.flushed = true
+}
+
+func (m *mockResponseWriterFlusher) Header() http.Header {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ResponseRecorder.Header()
+}
+
+func (m *mockResponseWriterFlusher) Write(p []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ResponseRecorder.Write(p)
+}
+
+func (m *mockResponseWriterFlusher) WriteHeader(statusCode int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ResponseRecorder.WriteHeader(statusCode)
+}
+
+// Get the current body content safely
+func (m *mockResponseWriterFlusher) Body() *bytes.Buffer {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ResponseRecorder.Body
+}
+
+// Get the flushed status safely
+func (m *mockResponseWriterFlusher) Flushed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.flushed
 }
 
 // strictNonFlusherWriter implements http.ResponseWriter but *not* http.Flusher
@@ -142,12 +179,12 @@ func TestSSESession_Start(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify headers are set correctly
-	headers := w.ResponseRecorder.Header()
+	headers := w.Header()
 	assert.Equal(t, "text/event-stream", headers.Get("Content-Type"))
 	assert.Equal(t, "no-cache", headers.Get("Cache-Control"))
 	assert.Equal(t, "keep-alive", headers.Get("Connection"))
 	assert.Equal(t, "*", headers.Get("Access-Control-Allow-Origin"))
-	assert.True(t, w.flushed, "The response should be flushed")
+	assert.True(t, w.Flushed(), "The response should be flushed")
 
 	// Send an event to the session
 	testEvent := "event: test\ndata: test message\n\n"
@@ -157,7 +194,7 @@ func TestSSESession_Start(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify the event was written to the response
-	responseBody := w.ResponseRecorder.Body.String()
+	responseBody := w.Body().String()
 	assert.Contains(t, responseBody, "event: test")
 	assert.Contains(t, responseBody, "data: test message")
 
@@ -195,7 +232,7 @@ func TestSSESession_StartWithNotification(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify the notification was converted to an SSE event and written to the response
-	responseBody := w.ResponseRecorder.Body.String()
+	responseBody := w.Body().String()
 	assert.Contains(t, responseBody, "event: message")
 	assert.Contains(t, responseBody, `"jsonrpc":"2.0"`)
 	assert.Contains(t, responseBody, `"method":"test.method"`)
