@@ -2,112 +2,47 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/logging"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
+	"github.com/FreePeak/golang-mcp-server-sdk/pkg/server"
+	"github.com/FreePeak/golang-mcp-server-sdk/pkg/tools"
 )
 
 const (
-	serverName       = "Example MCP Server"
-	serverVersion    = "0.1.0"
+	serverName       = "Example SSE MCP Server"
+	serverVersion    = "1.0.0"
 	serverAddr       = ":8080"
 	shutdownTimeout  = 10 * time.Second
 	shutdownGraceful = 2 * time.Second
-
-	serverInstructions = `
-This is an example MCP server with sample resources, tools, and prompts.
-
-Available resources:
-- sample://hello-world: A hello world resource
-
-Available tools:
-- echo: Echoes back the input message
-
-Available prompts:
-- greeting: A simple greeting prompt
-
-You can connect to this server from Cursor by going to Settings > Extensions >
-Model Context Protocol and entering 'http://localhost:8080' as the server URL.
-`
 )
 
 func main() {
-	// Configure logger
-	logger, err := logging.New(logging.Config{
-		Level:       logging.InfoLevel,
-		Development: true,
-		OutputPaths: []string{"stdout"},
-		InitialFields: logging.Fields{
-			"component": "echo-sse",
-		},
-	})
-	if err != nil {
-		os.Exit(1)
-	}
+	// Create a new server using the SDK
+	mcpServer := server.NewMCPServer(serverName, serverVersion)
 
-	logger.Info("Starting Example MCP Server...")
+	// Set the server address
+	mcpServer.SetAddress(serverAddr)
 
-	// Create sample data
-	sampleResource := &domain.Resource{
-		URI:         "sample://hello-world",
-		Name:        "Hello World Resource",
-		Description: "A sample resource for demonstration purposes",
-		MIMEType:    "text/plain",
-	}
+	// Create tools with the fluent API
+	echoTool := tools.NewTool("echo",
+		tools.WithDescription("Echoes back the input message"),
+		tools.WithString("message",
+			tools.Description("The message to echo back"),
+			tools.Required(),
+		),
+	)
 
-	sampleTool := &domain.Tool{
-		Name:        "echo",
-		Description: "Echoes back the input message",
-		Parameters: []domain.ToolParameter{
-			{
-				Name:        "message",
-				Description: "The message to echo back",
-				Type:        "string",
-				Required:    true,
-			},
-		},
-	}
-
-	samplePrompt := &domain.Prompt{
-		Name:        "greeting",
-		Description: "A simple greeting prompt",
-		Template:    "Hello, {{name}}! Welcome to {{place}}.",
-		Parameters: []domain.PromptParameter{
-			{
-				Name:        "name",
-				Description: "The name to greet",
-				Type:        "string",
-				Required:    true,
-			},
-			{
-				Name:        "place",
-				Description: "The place to welcome to",
-				Type:        "string",
-				Required:    true,
-			},
-		},
-	}
-
-	// Use the builder pattern to create the server
+	// Add tool with handler
 	ctx := context.Background()
-	serverBuilder := builder.NewServerBuilder().
-		WithName(serverName).
-		WithVersion(serverVersion).
-		WithInstructions(serverInstructions).
-		WithAddress(serverAddr).
-		AddResource(ctx, sampleResource).
-		AddTool(ctx, sampleTool).
-		AddPrompt(ctx, samplePrompt)
-
-	// Build the MCP server with logger
-	service := serverBuilder.BuildService()
-	mcpServer := rest.NewMCPServer(service, serverAddr, rest.WithLogger(logger))
+	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
+	if err != nil {
+		log.Fatalf("Error adding tool: %v", err)
+	}
 
 	// Handle graceful shutdown
 	shutdown := make(chan os.Signal, 1)
@@ -115,31 +50,49 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		if err := mcpServer.Start(); err != nil {
-			if err.Error() != "http: Server closed" {
-				logger.Fatal("Server failed to start", logging.Fields{"error": err})
-			}
+		fmt.Printf("Server is running on %s\n", serverAddr)
+		fmt.Printf("You can connect to this server from Cursor by going to Settings > Extensions > Model Context Protocol and entering 'http://localhost%s' as the server URL.\n", serverAddr)
+		fmt.Println("Press Ctrl+C to stop")
+
+		// Use the SDK's built-in HTTP server functionality
+		if err := mcpServer.ServeHTTP(); err != nil {
+			log.Fatalf("Server failed to start: %v", err)
 		}
 	}()
 
-	logger.Info("Server is running", logging.Fields{"address": serverAddr})
-	logger.Info("Connection instructions", logging.Fields{"instructions": "You can connect to this server from Cursor by going to Settings > Extensions > Model Context Protocol and entering 'http://localhost:8080' as the server URL."})
-	logger.Info("Press Ctrl+C to stop")
-
 	// Wait for shutdown signal
 	<-shutdown
-	logger.Info("Shutting down server...")
+	fmt.Println("Shutting down server...")
 
 	// Create a context with timeout for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	// Shutdown server
-	if err := mcpServer.Stop(ctx); err != nil {
-		logger.Fatal("Server forced to shutdown", logging.Fields{"error": err})
+	if err := mcpServer.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
 	// Small delay to allow final cleanup
 	time.Sleep(shutdownGraceful)
-	logger.Info("Server stopped gracefully")
+	fmt.Println("Server stopped gracefully")
+}
+
+// Echo tool handler
+func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
+	// Extract the message parameter
+	message, ok := request.Parameters["message"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid 'message' parameter")
+	}
+
+	// Return the echo response in the format expected by the MCP protocol
+	return map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": message,
+			},
+		},
+	}, nil
 }

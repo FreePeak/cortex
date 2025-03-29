@@ -3,16 +3,15 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/builder"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/rest"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/interfaces/stdio"
+	"github.com/FreePeak/golang-mcp-server-sdk/pkg/server"
+	"github.com/FreePeak/golang-mcp-server-sdk/pkg/tools"
 )
 
 const (
@@ -23,11 +22,11 @@ const (
 
 	serverInstructions = `
 This is a multi-protocol MCP server example that can run in HTTP, SSE, or StdIO mode.
-It demonstrates how to use the builder pattern to create different server types
+It demonstrates how to use the SDK to create different server types
 with a shared configuration.
 
 Available tool:
-- mcp_golang_mcp_server_ws_mcp_golang_mcp_server_sse_echo: Echoes back the input message
+- echo_multi_protocol: Echoes back the input message
 `
 )
 
@@ -41,58 +40,48 @@ func main() {
 	logger := log.New(os.Stdout, "[MCP-SERVER] ", log.LstdFlags|log.Lshortfile)
 	logger.Printf("Starting %s v%s in %s mode...", serverName, serverVersion, *mode)
 
-	// Create echo tool
-	echoTool := &domain.Tool{
-		Name:        "mcp_golang_mcp_server_ws_mcp_golang_mcp_server_sse_echo",
-		Description: "Echoes back the input message",
-		Parameters: []domain.ToolParameter{
-			{
-				Name:        "message",
-				Description: "The message to echo back",
-				Type:        "string",
-				Required:    true,
-			},
-		},
-	}
+	// Create a server
+	mcpServer := server.NewMCPServer(serverName, serverVersion)
+	mcpServer.SetAddress(*addr)
 
-	// Use the builder pattern to create a base server configuration
+	// Create echo tool using the fluent API
+	echoTool := tools.NewTool("echo_multi_protocol",
+		tools.WithDescription("Echoes back the input message"),
+		tools.WithString("message",
+			tools.Description("The message to echo back"),
+			tools.Required(),
+		),
+	)
+
+	// Register the tool with its handler
 	ctx := context.Background()
-	serverBuilder := builder.NewServerBuilder().
-		WithName(serverName).
-		WithVersion(serverVersion).
-		WithInstructions(serverInstructions).
-		WithAddress(*addr).
-		AddTool(ctx, echoTool)
+	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
+	if err != nil {
+		logger.Fatalf("Failed to add tool: %v", err)
+	}
 
 	// Start the appropriate server based on mode
 	switch *mode {
 	case "http":
-		// Build and start the HTTP server
-		mcpServer := serverBuilder.BuildMCPServer()
+		// Start the HTTP server
 		startHTTPServer(mcpServer, logger)
 
 	case "stdio":
 		// Start the StdIO server
 		logger.Println("Starting StdIO server. Send JSON-RPC requests via stdin.")
-		err := serverBuilder.ServeStdio(
-			stdio.WithErrorLogger(logger),
-		)
+		err := mcpServer.ServeStdio()
 		if err != nil {
 			logger.Fatalf("Error serving stdio: %v", err)
 		}
 
 	case "both":
 		// Start both HTTP and StdIO servers
-		mcpServer := serverBuilder.BuildMCPServer()
-
 		// Start HTTP server in a goroutine
 		go startHTTPServer(mcpServer, logger)
 
 		// Start StdIO server in the main thread
 		logger.Println("Starting StdIO server. Send JSON-RPC requests via stdin.")
-		err := serverBuilder.ServeStdio(
-			stdio.WithErrorLogger(logger),
-		)
+		err := mcpServer.ServeStdio()
 		if err != nil {
 			logger.Fatalf("Error serving stdio: %v", err)
 		}
@@ -102,8 +91,30 @@ func main() {
 	}
 }
 
+// handleEcho handles echo tool calls
+func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
+	// Extract message parameter
+	message, ok := request.Parameters["message"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid message parameter")
+	}
+
+	// Get current timestamp
+	timestamp := time.Now().Format(time.RFC3339)
+
+	// Return the echo response in MCP format
+	return map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": fmt.Sprintf("Echo: %s (at %s)", message, timestamp),
+			},
+		},
+	}, nil
+}
+
 // startHTTPServer starts the HTTP server and handles graceful shutdown
-func startHTTPServer(mcpServer *rest.MCPServer, logger *log.Logger) {
+func startHTTPServer(mcpServer *server.MCPServer, logger *log.Logger) {
 	// Handle graceful shutdown
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
@@ -111,7 +122,7 @@ func startHTTPServer(mcpServer *rest.MCPServer, logger *log.Logger) {
 	// Start server in a goroutine
 	go func() {
 		logger.Printf("HTTP server starting on %s", mcpServer.GetAddress())
-		if err := mcpServer.Start(); err != nil {
+		if err := mcpServer.ServeHTTP(); err != nil {
 			if err.Error() != "http: Server closed" {
 				logger.Fatalf("Server failed to start: %v", err)
 			}
@@ -127,7 +138,7 @@ func startHTTPServer(mcpServer *rest.MCPServer, logger *log.Logger) {
 	defer cancel()
 
 	// Shutdown server
-	if err := mcpServer.Stop(ctx); err != nil {
+	if err := mcpServer.Shutdown(ctx); err != nil {
 		logger.Fatalf("Server forced to shutdown: %v", err)
 	}
 

@@ -1,3 +1,4 @@
+// Example of using the MCP SDK to create a simple echo server
 package main
 
 import (
@@ -5,23 +6,17 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/FreePeak/golang-mcp-server-sdk/pkg/server"
 	"github.com/FreePeak/golang-mcp-server-sdk/pkg/tools"
 )
 
-// Record a timestamp for demo purposes
-func getTimestamp() string {
-	return fmt.Sprintf("%d", time.Now().Unix())
-}
-
 func main() {
-	// Create the server with name and version
-	mcpServer := server.NewMCPServer("Echo Stdio Server", "1.0.0")
+	// Create the server
+	mcpServer := server.NewMCPServer("Echo Server Example", "1.0.0")
 
-	// Create the echo tool using the fluent API
-	echoTool := tools.NewTool("echo_golang_mcp_server_stdio",
+	// Create an echo tool
+	echoTool := tools.NewTool("echo",
 		tools.WithDescription("Echoes back the input message"),
 		tools.WithString("message",
 			tools.Description("The message to echo back"),
@@ -29,20 +24,21 @@ func main() {
 		),
 	)
 
-	// Add the tool with a handler function
+	// Add the tool to the server with a handler
 	ctx := context.Background()
 	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
 	if err != nil {
 		log.Fatalf("Error adding tool: %v", err)
 	}
 
-	// Print server ready message
-	fmt.Println("Server ready. You can now send JSON-RPC requests via stdin.")
-	fmt.Println("Try: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"echo_golang_mcp_server_stdio\",\"parameters\":{\"message\":\"Hello, World!\"}}}")
-
 	// Start the server
+	fmt.Println("Starting Echo Server...")
+	fmt.Println("Send JSON-RPC messages via stdin to interact with the server.")
+	fmt.Println("Try: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"parameters\":{\"message\":\"Hello, World!\"}}}")
+
+	// Serve over stdio
 	if err := mcpServer.ServeStdio(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error serving stdio: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -55,16 +51,12 @@ func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{
 		return nil, fmt.Errorf("missing or invalid 'message' parameter")
 	}
 
-	// Add a timestamp to show we can process the message
-	timestamp := getTimestamp()
-	responseMessage := fmt.Sprintf("[%s] %s", timestamp, message)
-
 	// Return the echo response in the format expected by the MCP protocol
 	return map[string]interface{}{
 		"content": []map[string]interface{}{
 			{
 				"type": "text",
-				"text": responseMessage,
+				"text": message,
 			},
 		},
 	}, nil
