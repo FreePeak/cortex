@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -37,11 +38,25 @@ func main() {
 		),
 	)
 
-	// Add tool with handler
+	// Create the weather tool
+	weatherTool := tools.NewTool("weather",
+		tools.WithDescription("Gets today's weather forecast"),
+		tools.WithString("location",
+			tools.Description("The location to get weather for"),
+			tools.Required(),
+		),
+	)
+
+	// Add tools with handlers
 	ctx := context.Background()
 	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
 	if err != nil {
-		log.Fatalf("Error adding tool: %v", err)
+		log.Fatalf("Error adding echo tool: %v", err)
+	}
+
+	err = mcpServer.AddTool(ctx, weatherTool, handleWeather)
+	if err != nil {
+		log.Fatalf("Error adding weather tool: %v", err)
 	}
 
 	// Handle graceful shutdown
@@ -52,6 +67,7 @@ func main() {
 	go func() {
 		fmt.Printf("Server is running on %s\n", serverAddr)
 		fmt.Printf("You can connect to this server from Cursor by going to Settings > Extensions > Model Context Protocol and entering 'http://localhost%s' as the server URL.\n", serverAddr)
+		fmt.Println("Available tools: echo, weather")
 		fmt.Println("Press Ctrl+C to stop")
 
 		// Use the SDK's built-in HTTP server functionality
@@ -92,6 +108,46 @@ func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{
 			{
 				"type": "text",
 				"text": message,
+			},
+		},
+	}, nil
+}
+
+// Weather tool handler
+func handleWeather(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
+	// Extract the location parameter
+	location, ok := request.Parameters["location"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid 'location' parameter")
+	}
+
+	// Generate random weather data for testing
+	conditions := []string{"Sunny", "Partly Cloudy", "Cloudy", "Rainy", "Thunderstorms", "Snowy", "Foggy", "Windy"}
+	tempF := rand.Intn(50) + 30 // Random temperature between 30°F and 80°F
+	tempC := (tempF - 32) * 5 / 9
+	humidity := rand.Intn(60) + 30 // Random humidity between 30% and 90%
+	windSpeed := rand.Intn(20) + 5 // Random wind speed between 5-25mph
+
+	// Select a random condition
+	condition := conditions[rand.Intn(len(conditions))]
+
+	// Format today's date
+	today := time.Now().Format("Monday, January 2, 2006")
+
+	// Format the weather response
+	weatherInfo := fmt.Sprintf("Weather for %s on %s:\n"+
+		"Condition: %s\n"+
+		"Temperature: %d°F (%d°C)\n"+
+		"Humidity: %d%%\n"+
+		"Wind Speed: %d mph",
+		location, today, condition, tempF, tempC, humidity, windSpeed)
+
+	// Return the weather response in the format expected by the MCP protocol
+	return map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": weatherInfo,
 			},
 		},
 	}, nil

@@ -62,9 +62,25 @@ func NewInMemoryToolRepository() *InMemoryToolRepository {
 
 // GetTool retrieves a tool by its name.
 func (r *InMemoryToolRepository) GetTool(ctx context.Context, name string) (*domain.Tool, error) {
+	// Try to get the tool with the exact name
 	if tool, ok := r.tools.Load(name); ok {
 		return tool.(*domain.Tool), nil
 	}
+
+	// If the name starts with "cortex_", try without the prefix
+	if len(name) > 7 && name[:7] == "cortex_" {
+		unprefixedName := name[7:]
+		if tool, ok := r.tools.Load(unprefixedName); ok {
+			return tool.(*domain.Tool), nil
+		}
+	}
+
+	// If the name doesn't have the prefix, try with the prefix
+	prefixedName := "cortex_" + name
+	if tool, ok := r.tools.Load(prefixedName); ok {
+		return tool.(*domain.Tool), nil
+	}
+
 	return nil, domain.NewToolNotFoundError(name)
 }
 
@@ -80,7 +96,33 @@ func (r *InMemoryToolRepository) ListTools(ctx context.Context) ([]*domain.Tool,
 
 // AddTool adds a new tool to the repository.
 func (r *InMemoryToolRepository) AddTool(ctx context.Context, tool *domain.Tool) error {
+	// Store the tool with its original name
 	r.tools.Store(tool.Name, tool)
+
+	// Also store a duplicate with the prefixed name if it doesn't already have the prefix
+	if len(tool.Name) < 7 || tool.Name[:7] != "cortex_" {
+		prefixedName := "cortex_" + tool.Name
+		// Create a copy of the tool with the prefixed name
+		prefixedTool := &domain.Tool{
+			Name:        prefixedName,
+			Description: tool.Description,
+			Parameters:  tool.Parameters,
+		}
+		r.tools.Store(prefixedName, prefixedTool)
+	}
+
+	// If it has a prefix, also store without the prefix
+	if len(tool.Name) > 7 && tool.Name[:7] == "cortex_" {
+		unprefixedName := tool.Name[7:]
+		// Create a copy of the tool with the unprefixed name
+		unprefixedTool := &domain.Tool{
+			Name:        unprefixedName,
+			Description: tool.Description,
+			Parameters:  tool.Parameters,
+		}
+		r.tools.Store(unprefixedName, unprefixedTool)
+	}
+
 	return nil
 }
 

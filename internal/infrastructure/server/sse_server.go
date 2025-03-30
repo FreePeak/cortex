@@ -127,6 +127,11 @@ func (p *ConnectionPool) Count() int {
 	return len(p.sessions)
 }
 
+// package-level constant for context key
+type ContextKey string
+
+const SessionIDContextKey ContextKey = "sessionId"
+
 // SSEServer implements a Server-Sent Events (SSE) based server.
 // It provides real-time communication capabilities over HTTP using the SSE protocol.
 type SSEServer struct {
@@ -418,6 +423,9 @@ func (s *SSEServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Create context for the message handler
 	ctx := r.Context()
+	// Add the session ID to the context so tool handlers can access it
+	ctx = context.WithValue(ctx, SessionIDContextKey, sessionID)
+
 	if s.contextFunc != nil {
 		ctx = s.contextFunc(ctx, r)
 	}
