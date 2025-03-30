@@ -3,9 +3,8 @@
         "golang-mcp-server-sse": {
             "url": "http://localhost:8080/sse"
         },
-        "golang-mcp-server-stdio": {
-            "command": "./bin/stdio-server",
-            "args": [">", "./run.log"]
+        "golang-mcp-server-stdio-cortex": {
+            "command": "./bin/stdio-server"
         }
     }
 }
