@@ -136,27 +136,18 @@ func TestInMemoryToolRepository_ListTools(t *testing.T) {
 	err = repo.AddTool(ctx, tool2)
 	require.NoError(t, err)
 
-	// List tools - now each tool has two entries (original + prefixed)
+	// List tools
 	tools, err := repo.ListTools(ctx)
 	assert.NoError(t, err)
-	assert.Len(t, tools, 4) // 2 original tools + 2 prefixed tools
-
-	// Collect all tool names
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		names = append(names, tool.Name)
-	}
+	assert.Len(t, tools, 2)
 
 	// Verify the tools are in the list
+	names := []string{tools[0].Name, tools[1].Name}
 	assert.Contains(t, names, "tool1")
 	assert.Contains(t, names, "tool2")
-	assert.Contains(t, names, "cortex_tool1")
-	assert.Contains(t, names, "cortex_tool2")
 }
 
 func TestInMemoryToolRepository_DeleteTool(t *testing.T) {
-	t.Skip("Skipping test that requires deeper refactoring of the repository implementation after removing duplicate tool registration")
-
 	repo := NewInMemoryToolRepository()
 	ctx := context.Background()
 
@@ -165,34 +156,12 @@ func TestInMemoryToolRepository_DeleteTool(t *testing.T) {
 	err := repo.AddTool(ctx, tool)
 	require.NoError(t, err)
 
-	// Verify both original and prefixed tools exist
-	originalTool, err := repo.GetTool(ctx, "test-tool")
-	assert.NoError(t, err)
-	assert.Equal(t, "test-tool", originalTool.Name)
-
-	prefixedTool, err := repo.GetTool(ctx, "cortex_test-tool")
-	assert.NoError(t, err)
-	assert.Equal(t, "cortex_test-tool", prefixedTool.Name)
-
-	// Delete the original tool
+	// Delete the tool
 	err = repo.DeleteTool(ctx, "test-tool")
 	assert.NoError(t, err)
 
-	// Verify the original tool was deleted
+	// Verify the tool was deleted
 	_, err = repo.GetTool(ctx, "test-tool")
-	assert.Error(t, err)
-
-	// The prefixed tool still exists and can be fetched
-	prefixedTool, err = repo.GetTool(ctx, "cortex_test-tool")
-	assert.NoError(t, err)
-	assert.Equal(t, "cortex_test-tool", prefixedTool.Name)
-
-	// Delete the prefixed tool
-	err = repo.DeleteTool(ctx, "cortex_test-tool")
-	assert.NoError(t, err)
-
-	// Verify the prefixed tool was deleted
-	_, err = repo.GetTool(ctx, "cortex_test-tool")
 	assert.Error(t, err)
 
 	// Try to delete a non-existent tool

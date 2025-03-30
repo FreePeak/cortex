@@ -1,5 +1,5 @@
 # Makefile for cortex
-.PHONY: build test test-race lint clean run example coverage deps update-deps help
+.PHONY: build test test-race lint clean run example-sse example-stdio example-multi coverage deps update-deps help
 
 # Go parameters
 GOCMD=go
@@ -8,11 +8,17 @@ GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
-BINARY_NAME=mcp-server
-STDIO_BIN_SERVER=bin/echo-stdio-server
-SSE_BIN_SERVER=bin/echo-sse-server
-ECHO_SSE_SERVER=cmd/echo-sse-server/main.go
-ECHO_STDIO_SERVER=cmd/echo-stdio-server/main.go
+
+# Example paths
+STDIO_SERVER=examples/stdio-server/main.go
+SSE_SERVER=examples/sse-server/main.go
+MULTI_PROTOCOL_SERVER=examples/multi-protocol/main.go
+
+# Binary paths
+BIN_DIR=bin
+STDIO_BIN=$(BIN_DIR)/stdio-server
+SSE_BIN=$(BIN_DIR)/sse-server
+MULTI_BIN=$(BIN_DIR)/multi-protocol-server
 
 help:
 	@echo "Available commands:"
@@ -25,20 +31,31 @@ help:
 	@echo "  make clean        - Clean build artifacts"
 	@echo "  make deps         - Tidy up dependencies"
 	@echo "  make update-deps  - Update dependencies"
-	@echo "  make example      - Run example SSE server"
+	@echo "  make example-sse  - Run example SSE server"
 	@echo "  make example-stdio - Run example stdio server"
+	@echo "  make example-multi - Run example multi-protocol server"
 
 all: test build
 
-build:
-	$(GOBUILD) -o $(STDIO_BIN_SERVER) $(ECHO_STDIO_SERVER)
-	$(GOBUILD) -o $(SSE_BIN_SERVER) $(ECHO_SSE_SERVER)
+build: $(BIN_DIR)
+	$(GOBUILD) -o $(STDIO_BIN) $(STDIO_SERVER)
+	$(GOBUILD) -o $(SSE_BIN) $(SSE_SERVER)
+	$(GOBUILD) -o $(MULTI_BIN) $(MULTI_PROTOCOL_SERVER)
 
-example:
-	$(GOCMD) run $(ECHO_SSE_SERVER)
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+example-sse:
+	$(GOCMD) run $(SSE_SERVER)
 
 example-stdio:
-	cd echo-stdio-test && go run main.go
+	$(GOCMD) run $(STDIO_SERVER)
+
+example-multi:
+	$(GOCMD) run $(MULTI_PROTOCOL_SERVER) -protocol stdio
+
+example-multi-http:
+	$(GOCMD) run $(MULTI_PROTOCOL_SERVER) -protocol http -address localhost:8080
 
 test:
 	$(GOTEST) ./... -v -race -cover
@@ -55,7 +72,7 @@ lint:
 
 clean:
 	$(GOCLEAN)
-	rm -f bin/$(BINARY_NAME)
+	rm -rf $(BIN_DIR)
 	rm -f coverage.out
 
 deps:

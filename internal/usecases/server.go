@@ -60,16 +60,12 @@ func (s *ServerService) RegisterToolHandler(name string, handler ToolHandlerFunc
 	// Register with original name
 	s.toolHandlers[name] = handler
 
-	// If the tool name doesn't have the cortex_ prefix, register a prefixed version
-	if len(name) < 7 || name[:7] != "cortex_" {
-		prefixedName := "cortex_" + name
-		// Only register if there's not already a handler with this name
-		if _, exists := s.toolHandlers[prefixedName]; !exists {
-			s.toolHandlers[prefixedName] = handler
-		}
+	// Register with prefixed name if it doesn't already start with the prefix
+	prefixedName := "cortex_" + name
+	// Only register if there's not already a handler with this name
+	if _, exists := s.toolHandlers[prefixedName]; !exists {
+		s.toolHandlers[prefixedName] = handler
 	}
-
-	// We no longer register the unprefixed version when prefix exists
 }
 
 // GetToolHandler retrieves a handler for a specific tool
@@ -77,6 +73,14 @@ func (s *ServerService) GetToolHandler(name string) ToolHandlerFunc {
 	// Try to get the handler with the exact name
 	if handler, exists := s.toolHandlers[name]; exists {
 		return handler
+	}
+
+	// If the name starts with "cortex_", try without the prefix
+	if len(name) > 7 && name[:7] == "cortex_" {
+		unprefixedName := name[7:]
+		if handler, exists := s.toolHandlers[unprefixedName]; exists {
+			return handler
+		}
 	}
 
 	// If the name doesn't have the prefix, try with the prefix

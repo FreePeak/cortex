@@ -5,11 +5,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/FreePeak/cortex/internal/builder"
 	"github.com/FreePeak/cortex/internal/domain"
 	"github.com/FreePeak/cortex/internal/interfaces/stdio"
+	"github.com/FreePeak/cortex/pkg/plugin"
 	"github.com/FreePeak/cortex/pkg/types"
 )
 
@@ -24,22 +24,33 @@ type ToolCallRequest struct {
 }
 
 // MCPServer represents an MCP server that can be used to handle MCP protocol messages.
+// It supports both static tool registration and dynamic provider-based tools.
 type MCPServer struct {
 	name     string
 	version  string
 	tools    map[string]*types.Tool
 	handlers map[string]ToolHandler
+	registry plugin.Registry
 	builder  *builder.ServerBuilder
+	logger   *log.Logger
 }
 
 // NewMCPServer creates a new MCP server with the specified name and version.
-func NewMCPServer(name, version string) *MCPServer {
+func NewMCPServer(name, version string, logger *log.Logger) *MCPServer {
+	if logger == nil {
+		logger = log.Default()
+	}
+
+	registry := plugin.NewRegistry(logger)
+
 	return &MCPServer{
 		name:     name,
 		version:  version,
 		tools:    make(map[string]*types.Tool),
 		handlers: make(map[string]ToolHandler),
+		registry: registry,
 		builder:  builder.NewServerBuilder().WithName(name).WithVersion(version),
+		logger:   logger,
 	}
 }
 
@@ -53,7 +64,7 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 	}
 
 	// Log the original tool name
-	log.Printf("Adding tool with original name: %s", tool.Name)
+	s.logger.Printf("Adding tool with original name: %s", tool.Name)
 
 	// Store the original tool name to use for registration
 	originalName := tool.Name
@@ -69,7 +80,7 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 	// Create an adapter to convert from our API to the internal API
 	serviceAdapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
 		// Log that the handler is being called
-		log.Printf("Service handler called for tool: %s", originalName)
+		s.logger.Printf("Service handler called for tool: %s", originalName)
 
 		// Convert domain session to public session
 		pubSession := &types.ClientSession{
@@ -92,82 +103,47 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 	service := s.builder.BuildService()
 	service.RegisterToolHandler(originalName, serviceAdapter)
 
-	log.Printf("Registered tool: %s", originalName)
+	s.logger.Printf("Registered tool: %s", originalName)
 	return nil
 }
 
-// RegisterToolHandler registers a handler for the specified tool.
-func (s *MCPServer) RegisterToolHandler(name string, handler ToolHandler) error {
-	if _, exists := s.tools[name]; !exists {
-		return fmt.Errorf("tool %s not found", name)
+// RegisterProvider registers a tool provider with the server.
+func (s *MCPServer) RegisterProvider(ctx context.Context, provider plugin.Provider) error {
+	// Register the provider with the registry
+	err := s.registry.RegisterProvider(ctx, provider)
+	if err != nil {
+		return fmt.Errorf("failed to register provider: %w", err)
 	}
 
-	s.handlers[name] = handler
+	// Get all tools from the provider and register them with the builder
+	tools, err := provider.GetTools(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get tools from provider: %w", err)
+	}
 
-	// Get the service from the builder
-	service := s.builder.BuildService()
-
-	// Create an adapter to convert from our API to the internal API
-	serviceAdapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
-		// Convert domain session to public session
-		pubSession := &types.ClientSession{
-			ID:        session.ID,
-			UserAgent: session.UserAgent,
-			Connected: session.Connected,
+	// Register each tool with the builder
+	for _, tool := range tools {
+		// Convert to internal tool
+		internalTool := &domain.Tool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  make([]domain.ToolParameter, len(tool.Parameters)),
 		}
 
-		// Create request and call the handler
-		request := ToolCallRequest{
-			Name:       name,
-			Parameters: params,
-			Session:    pubSession,
-		}
-
-		return handler(ctx, request)
-	}
-
-	service.RegisterToolHandler(name, serviceAdapter)
-
-	return nil
-}
-
-// ServeStdio serves the MCP server over standard I/O.
-func (s *MCPServer) ServeStdio() error {
-	debugMode := os.Getenv("CORTEX_DEBUG") == "1"
-
-	if debugMode {
-		log.Printf("ServeStdio called with %d registered tools", len(s.handlers))
-	}
-
-	// Create stdio options with tool handlers
-	var stdioOpts []stdio.StdioOption
-
-	// Add the default error logger
-	stdioOpts = append(stdioOpts, stdio.WithErrorLogger(log.Default()))
-
-	// First, create a map of toolHandlers
-	toolHandlersMap := make(map[string]func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error))
-
-	// Add all tool handlers to the map
-	for name, handler := range s.handlers {
-		// Only register tools with "cortex_" prefix or manually update the name to include prefix
-		toolName := name
-		if len(toolName) < 7 || toolName[:7] != "cortex_" {
-			if debugMode {
-				log.Printf("Skipping non-prefixed tool: %s", toolName)
+		for i, param := range tool.Parameters {
+			internalTool.Parameters[i] = domain.ToolParameter{
+				Name:        param.Name,
+				Description: param.Description,
+				Type:        param.Type,
+				Required:    param.Required,
 			}
-			// Skip non-prefixed tools
-			continue
 		}
 
-		toolHandler := handler
+		// Add the tool to the internal builder
+		s.builder.AddTool(ctx, internalTool)
 
-		if debugMode {
-			log.Printf("Registering tool handler for %s", toolName)
-		}
-
-		// Create an adapter function that converts between our API and the internal API
-		adapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
+		// Create an adapter to convert from our API to the internal API
+		serviceAdapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
 			// Convert domain session to public session
 			pubSession := &types.ClientSession{
 				ID:        session.ID,
@@ -175,34 +151,79 @@ func (s *MCPServer) ServeStdio() error {
 				Connected: session.Connected,
 			}
 
-			if debugMode {
-				log.Printf("Tool handler called for %s with params %v", toolName, params)
-			}
-
-			// Create request and call the handler
-			request := ToolCallRequest{
-				Name:       toolName,
+			// Create request and execute the tool through the provider
+			request := &plugin.ExecuteRequest{
+				ToolName:   tool.Name,
 				Parameters: params,
 				Session:    pubSession,
 			}
 
-			return toolHandler(ctx, request)
+			// Find the provider for this tool
+			_, provider, err := s.registry.GetTool(ctx, tool.Name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get tool %s: %w", tool.Name, err)
+			}
+
+			// Execute the tool through the provider
+			response, err := provider.ExecuteTool(ctx, request)
+			if err != nil {
+				return nil, fmt.Errorf("failed to execute tool %s: %w", tool.Name, err)
+			}
+
+			if response.Error != nil {
+				return nil, response.Error
+			}
+
+			return response.Content, nil
 		}
 
-		// Add the tool handler to the map
-		toolHandlersMap[toolName] = adapter
-
-		// Add the tool handler as an option
-		stdioOpts = append(stdioOpts, stdio.WithToolHandler(toolName, adapter))
+		// Get the service from the builder
+		service := s.builder.BuildService()
+		service.RegisterToolHandler(tool.Name, serviceAdapter)
+		s.logger.Printf("Registered tool: %s", tool.Name)
 	}
 
-	// Add an option to directly set all tool handlers at once
-	if len(toolHandlersMap) > 0 {
-		stdioOpts = append(stdioOpts, stdio.WithAllToolHandlers(toolHandlersMap))
-		if debugMode {
-			log.Printf("Registered %d tool handlers with WithAllToolHandlers", len(toolHandlersMap))
-		}
+	return nil
+}
+
+// UnregisterProvider removes a tool provider from the server.
+func (s *MCPServer) UnregisterProvider(ctx context.Context, providerID string) error {
+	// Get the provider first to retrieve its tools
+	provider, err := s.registry.GetProvider(ctx, providerID)
+	if err != nil {
+		return fmt.Errorf("failed to get provider %s: %w", providerID, err)
 	}
+
+	// Get all tools from the provider
+	tools, err := provider.GetTools(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get tools from provider %s: %w", providerID, err)
+	}
+
+	// Since the internal service API doesn't expose a way to unregister tools directly,
+	// we'll need to handle this differently. Let's just log it for now.
+	for _, tool := range tools {
+		s.logger.Printf("Note: Tool %s cannot be unregistered from existing service. A new service will be needed.", tool.Name)
+	}
+
+	// Unregister the provider from the registry
+	err = s.registry.UnregisterProvider(ctx, providerID)
+	if err != nil {
+		return fmt.Errorf("failed to unregister provider %s: %w", providerID, err)
+	}
+
+	return nil
+}
+
+// ServeStdio serves the MCP server over standard I/O.
+func (s *MCPServer) ServeStdio() error {
+	s.logger.Printf("Starting MCP server over stdio: %s v%s", s.name, s.version)
+
+	// Create stdio options
+	var stdioOpts []stdio.StdioOption
+
+	// Add the default error logger
+	stdioOpts = append(stdioOpts, stdio.WithErrorLogger(s.logger))
 
 	// Start the stdio server with our custom handler
 	return s.builder.ServeStdio(stdioOpts...)
@@ -224,10 +245,6 @@ func (s *MCPServer) GetAddress() string {
 func (s *MCPServer) ServeHTTP() error {
 	// Create an HTTP server with all our tools already registered through the builder
 	mcpServer := s.builder.BuildMCPServer()
-
-	// The tools are already registered with the server through the builder pattern
-	// when we called AddTool on our MCPServer, which called AddTool on the builder
-	// Additionally, we've already registered the tool handlers with the ServerService
 
 	// Start the HTTP server
 	return mcpServer.Start()

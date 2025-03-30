@@ -4,7 +4,7 @@
             "url": "http://localhost:8080/sse"
         },
         "golang-mcp-server-stdio": {
-            "command": "./bin/echo-stdio-server",
+            "command": "./bin/stdio-server",
             "args": [">", "./run.log"]
         }
     }
