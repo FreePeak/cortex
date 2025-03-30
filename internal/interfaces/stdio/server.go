@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
@@ -505,6 +506,8 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 	// Handle all echo-related tools
 	if strings.Contains(strings.ToLower(toolName), "echo") {
 		toolResult, toolErr = handleEchoTool(toolParams)
+	} else if strings.Contains(strings.ToLower(toolName), "weather") {
+		toolResult, toolErr = handleWeatherTool(toolParams)
 	} else {
 		return nil, &domain.JSONRPCError{
 			Code:    InternalErrorCode,
@@ -554,6 +557,48 @@ func handleEchoTool(params map[string]interface{}) (interface{}, error) {
 			{
 				"type": "text",
 				"text": message,
+			},
+		},
+	}, nil
+}
+
+// Handle weather tool types
+func handleWeatherTool(params map[string]interface{}) (interface{}, error) {
+	// Extract location parameter
+	locationVal, exists := params["location"]
+	if !exists || locationVal == nil {
+		return nil, fmt.Errorf("missing 'location' parameter")
+	}
+
+	location, ok := locationVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("location must be a string")
+	}
+
+	// Generate random weather data for testing
+	rand.Seed(time.Now().UnixNano())
+	conditions := []string{"Sunny", "Partly Cloudy", "Cloudy", "Rainy", "Thunderstorms", "Snowy", "Foggy", "Windy"}
+	tempF := rand.Intn(50) + 30 // Random temperature between 30°F and 80°F
+	tempC := (tempF - 32) * 5 / 9
+	humidity := rand.Intn(60) + 30 // Random humidity between 30% and 90%
+	windSpeed := rand.Intn(20) + 5 // Random wind speed between 5-25mph
+
+	// Select a random condition
+	condition := conditions[rand.Intn(len(conditions))]
+
+	// Format today's date
+	today := time.Now().Format("Monday, January 2, 2006")
+
+	// Format the weather response
+	weatherInfo := fmt.Sprintf("Weather for %s on %s:\nCondition: %s\nTemperature: %d°F (%d°C)\nHumidity: %d%%\nWind Speed: %d mph",
+		location, today, condition, tempF, tempC, humidity, windSpeed)
+
+	// Return the weather response in the format expected by the MCP protocol
+	return map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": weatherInfo,
 			},
 		},
 	}, nil

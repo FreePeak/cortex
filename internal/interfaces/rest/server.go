@@ -403,10 +403,15 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request domain.JSONRPC
 		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32602, "Missing or invalid 'name' parameter")
 	}
 
-	// Get tool parameters - check for 'arguments' field instead of 'parameters'
-	toolParams, ok := params["arguments"].(map[string]interface{})
-	if !ok {
-		s.logger.Debug("Invalid or missing 'arguments' field")
+	// Get tool parameters - check for 'parameters' field first, then fallback to 'arguments' for compatibility
+	var toolParams map[string]interface{}
+
+	if p, ok := params["parameters"].(map[string]interface{}); ok {
+		toolParams = p
+	} else if a, ok := params["arguments"].(map[string]interface{}); ok {
+		toolParams = a
+	} else {
+		s.logger.Debug("No parameters or arguments field found, using empty map")
 		toolParams = map[string]interface{}{}
 	}
 
@@ -416,7 +421,7 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request domain.JSONRPC
 	})
 
 	// Get the tool
-	_, err := s.service.GetTool(ctx, toolName)
+	tool, err := s.service.GetTool(ctx, toolName)
 	if err != nil {
 		s.logger.Error("Error getting tool", logging.Fields{"tool": toolName, "error": err})
 		if errors.Is(err, domain.ErrNotFound) {
@@ -426,52 +431,57 @@ func (s *MCPServer) processToolsCall(ctx context.Context, request domain.JSONRPC
 		}
 	}
 
-	// Handle specific tools
-	var result interface{}
+	// Log we found the tool
+	s.logger.Info("Tool found", logging.Fields{
+		"tool":        toolName,
+		"description": tool.Description,
+		"paramCount":  len(tool.Parameters),
+	})
 
-	switch toolName {
-	case "echo":
-		// Handle echo tool
-		messageVal, ok := toolParams["message"]
-		if !ok || messageVal == nil {
-			s.logger.Warn("Missing or invalid 'message' parameter for echo tool")
-			return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32602, "Missing or invalid 'message' parameter")
+	// Get the client session (if available)
+	// Try to get session ID from context
+	clientID := ""
+	if ctx.Value(server.SessionIDContextKey) != nil {
+		if id, ok := ctx.Value(server.SessionIDContextKey).(string); ok {
+			clientID = id
+			s.logger.Debug("Using sessionID from context", logging.Fields{"sessionID": clientID})
 		}
-
-		// Convert message to string based on its type
-		var message string
-		switch v := messageVal.(type) {
-		case string:
-			message = v
-		case float64, int, int64, float32:
-			message = fmt.Sprintf("%v", v)
-		default:
-			// Try JSON conversion for complex types
-			jsonBytes, err := json.Marshal(v)
-			if err != nil {
-				message = fmt.Sprintf("%v", v)
-			} else {
-				message = string(jsonBytes)
-			}
-		}
-
-		// Echo the message back with content as an array of objects
-		result = map[string]interface{}{
-			"content": []map[string]interface{}{
-				{
-					"type": "text",
-					"text": message,
-				},
-			},
-		}
-
-	default:
-		s.logger.Warn("Tool handler not implemented", logging.Fields{"tool": toolName})
-		return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Tool handler not implemented for: %s", toolName))
 	}
 
-	s.logger.Info("Processed tools/call response", logging.Fields{"tool": toolName})
-	return domain.CreateResponse(jsonRPCVersion, request.ID, result)
+	// Create a client session for the tool handler
+	clientSession := &domain.ClientSession{
+		ID:        clientID,
+		Connected: true,
+	}
+
+	// Try to get a registered handler for this tool
+	handler := s.service.GetToolHandler(toolName)
+	if handler != nil {
+		// We have a registered handler, use it
+		s.logger.Info("Using registered handler for tool", logging.Fields{"tool": toolName})
+		result, err := handler(ctx, toolParams, clientSession)
+		if err != nil {
+			s.logger.Error("Error executing tool handler", logging.Fields{"tool": toolName, "error": err})
+			return domain.CreateErrorResponse(jsonRPCVersion, request.ID, -32603, fmt.Sprintf("Error executing tool: %v", err))
+		}
+
+		s.logger.Info("Tool executed successfully", logging.Fields{"tool": toolName})
+		return domain.CreateResponse(jsonRPCVersion, request.ID, result)
+	}
+
+	// No handler found - log available handlers and return error
+	availableHandlers := s.service.GetAllToolHandlerNames()
+	s.logger.Warn("No registered handler found for tool", logging.Fields{
+		"tool":              toolName,
+		"availableHandlers": fmt.Sprintf("%+v", availableHandlers),
+	})
+
+	return domain.CreateErrorResponse(
+		jsonRPCVersion,
+		request.ID,
+		-32603,
+		fmt.Sprintf("No handler registered for tool: %s. Available tools: %v", toolName, availableHandlers),
+	)
 }
 
 func (s *MCPServer) processPromptsList(ctx context.Context, request domain.JSONRPCRequest) interface{} {

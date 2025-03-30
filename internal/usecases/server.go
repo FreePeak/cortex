@@ -7,6 +7,9 @@ import (
 	"github.com/FreePeak/cortex/internal/domain"
 )
 
+// ToolHandlerFunc defines a function type for handling tool calls
+type ToolHandlerFunc func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error)
+
 // ServerService handles business logic for the MCP server.
 type ServerService struct {
 	name               string
@@ -17,6 +20,7 @@ type ServerService struct {
 	promptRepo         domain.PromptRepository
 	sessionRepo        domain.SessionRepository
 	notificationSender domain.NotificationSender
+	toolHandlers       map[string]ToolHandlerFunc // Map of tool names to handler functions
 }
 
 // ServerConfig contains configuration for the ServerService.
@@ -33,7 +37,7 @@ type ServerConfig struct {
 
 // NewServerService creates a new ServerService with the given repositories and configuration.
 func NewServerService(config ServerConfig) *ServerService {
-	return &ServerService{
+	service := &ServerService{
 		name:               config.Name,
 		version:            config.Version,
 		instructions:       config.Instructions,
@@ -42,7 +46,66 @@ func NewServerService(config ServerConfig) *ServerService {
 		promptRepo:         config.PromptRepo,
 		sessionRepo:        config.SessionRepo,
 		notificationSender: config.NotificationSender,
+		toolHandlers:       make(map[string]ToolHandlerFunc),
 	}
+
+	// No longer automatically register built-in tool handlers
+	// Clients must register any tools they need
+
+	return service
+}
+
+// RegisterToolHandler registers a handler for a specific tool
+func (s *ServerService) RegisterToolHandler(name string, handler ToolHandlerFunc) {
+	// Register with original name
+	s.toolHandlers[name] = handler
+
+	// Register with prefixed name if it doesn't already start with the prefix
+	if len(name) < 7 || name[:7] != "cortex_" {
+		prefixedName := "cortex_" + name
+		// Only register if there's not already a handler with this name
+		if _, exists := s.toolHandlers[prefixedName]; !exists {
+			s.toolHandlers[prefixedName] = handler
+		}
+	}
+
+	// If it starts with cortex_, also register without the prefix
+	if len(name) > 7 && name[:7] == "cortex_" {
+		unprefixedName := name[7:]
+		// Only register if there's not already a handler with this name
+		if _, exists := s.toolHandlers[unprefixedName]; !exists {
+			s.toolHandlers[unprefixedName] = handler
+		}
+	}
+}
+
+// GetToolHandler retrieves a handler for a specific tool
+func (s *ServerService) GetToolHandler(name string) ToolHandlerFunc {
+	// Try to get the handler with the exact name
+	if handler, exists := s.toolHandlers[name]; exists {
+		return handler
+	}
+
+	// If the name starts with "cortex_", try without the prefix
+	if len(name) > 7 && name[:7] == "cortex_" {
+		unprefixedName := name[7:]
+		if handler, exists := s.toolHandlers[unprefixedName]; exists {
+			return handler
+		}
+	}
+
+	// If the name doesn't have the prefix, try with the prefix
+	prefixedName := "cortex_" + name
+	return s.toolHandlers[prefixedName]
+}
+
+// GetAllToolHandlerNames returns a slice of all registered tool handler names
+func (s *ServerService) GetAllToolHandlerNames() []string {
+	names := make([]string, 0, len(s.toolHandlers))
+	for name := range s.toolHandlers {
+		names = append(names, name)
+	}
+	return names
 }
 
 // ServerInfo returns information about the server.
@@ -81,7 +144,27 @@ func (s *ServerService) ListTools(ctx context.Context) ([]*domain.Tool, error) {
 
 // GetTool returns a tool by its name.
 func (s *ServerService) GetTool(ctx context.Context, name string) (*domain.Tool, error) {
-	return s.toolRepo.GetTool(ctx, name)
+	// Try to get the tool with the provided name
+	tool, err := s.toolRepo.GetTool(ctx, name)
+	if err == nil {
+		return tool, nil
+	}
+
+	// If the name starts with "cortex_", try without the prefix
+	if len(name) > 7 && name[:7] == "cortex_" {
+		unprefixedName := name[7:]
+		return s.toolRepo.GetTool(ctx, unprefixedName)
+	}
+
+	// If the name doesn't have the prefix, try with the prefix
+	prefixedName := "cortex_" + name
+	tool, err = s.toolRepo.GetTool(ctx, prefixedName)
+	if err == nil {
+		return tool, nil
+	}
+
+	// If all attempts fail, return the original error
+	return nil, err
 }
 
 // AddTool adds a new tool.

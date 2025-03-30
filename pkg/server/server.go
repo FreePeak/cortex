@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/FreePeak/cortex/internal/builder"
 	"github.com/FreePeak/cortex/internal/domain"
@@ -52,20 +51,47 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 		return fmt.Errorf("handler cannot be nil")
 	}
 
-	// Create a tool with the platform-prefixed name
-	platformPrefixedName := fmt.Sprintf("cortex_%s", strings.ReplaceAll(tool.Name, "-", "_"))
+	// Log the original tool name
+	log.Printf("Adding tool with original name: %s", tool.Name)
 
-	// Update the tool's name to include the prefix
-	tool.Name = platformPrefixedName
+	// Store the original tool name to use for registration
+	originalName := tool.Name
 
-	// Store the tool and its handler
-	s.tools[tool.Name] = tool
-	s.handlers[tool.Name] = handler
+	// Store the tool and its handler using the original name
+	s.tools[originalName] = tool
+	s.handlers[originalName] = handler
 
 	// Add tool to the internal builder
 	s.builder.AddTool(ctx, convertToInternalTool(tool))
 
-	log.Printf("Registered tool with platform-prefixed name: %s", tool.Name)
+	// Register the tool handler with the ServerService to make it available to the HTTP/SSE server
+	// Create an adapter to convert from our API to the internal API
+	serviceAdapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
+		// Log that the handler is being called
+		log.Printf("Service handler called for tool: %s", originalName)
+
+		// Convert domain session to public session
+		pubSession := &types.ClientSession{
+			ID:        session.ID,
+			UserAgent: session.UserAgent,
+			Connected: session.Connected,
+		}
+
+		// Create request and call the handler
+		request := ToolCallRequest{
+			Name:       originalName,
+			Parameters: params,
+			Session:    pubSession,
+		}
+
+		return handler(ctx, request)
+	}
+
+	// Get the ServerService from the builder and register the handler
+	service := s.builder.BuildService()
+	service.RegisterToolHandler(originalName, serviceAdapter)
+
+	log.Printf("Registered tool: %s", originalName)
 	return nil
 }
 
@@ -76,6 +102,31 @@ func (s *MCPServer) RegisterToolHandler(name string, handler ToolHandler) error 
 	}
 
 	s.handlers[name] = handler
+
+	// Register the tool handler with the ServerService
+	service := s.builder.BuildService()
+
+	// Create an adapter to convert from our API to the internal API
+	serviceAdapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
+		// Convert domain session to public session
+		pubSession := &types.ClientSession{
+			ID:        session.ID,
+			UserAgent: session.UserAgent,
+			Connected: session.Connected,
+		}
+
+		// Create request and call the handler
+		request := ToolCallRequest{
+			Name:       name,
+			Parameters: params,
+			Session:    pubSession,
+		}
+
+		return handler(ctx, request)
+	}
+
+	service.RegisterToolHandler(name, serviceAdapter)
+
 	return nil
 }
 
@@ -141,6 +192,7 @@ func (s *MCPServer) ServeHTTP() error {
 
 	// The tools are already registered with the server through the builder pattern
 	// when we called AddTool on our MCPServer, which called AddTool on the builder
+	// Additionally, we've already registered the tool handlers with the ServerService
 
 	// Start the HTTP server
 	return mcpServer.Start()
