@@ -1,8 +1,0 @@
-2025/03/30 15:00:17 Adding tool with original name: echo
-2025/03/30 15:00:17 Registered tool with platform-prefixed name: cortex_echo
-Server is running on :8080
-You can connect to this server from Cursor by going to Settings > Extensions > Model Context Protocol and entering 'http://localhost:8080' as the server URL.
-Press Ctrl+C to stop
-{"level":"info","timestamp":"2025-03-30T15:00:17.897+0700","caller":"logging/logger.go:175","message":"Starting MCP server","component":"mcp-server","address":":8080"}
-{"level":"info","timestamp":"2025-03-30T15:00:17.897+0700","caller":"logging/logger.go:175","message":"Available endpoints","component":"mcp-server","endpoints":"/, /jsonrpc, /sse, /message, /events, /status"}
-2025/03/30 15:00:17 Server failed to start: listen tcp :8080: bind: address already in use
