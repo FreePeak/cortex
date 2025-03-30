@@ -148,23 +148,42 @@ Tools let LLMs take actions through your server. Unlike resources, tools are exp
 ```go
 // Define a calculator tool
 calculatorTool := tools.NewTool("calculator",
-    tools.WithDescription("Performs basic arithmetic"),
+    tools.WithDescription("Performs basic math operations"),
     tools.WithString("operation",
         tools.Description("The operation to perform (add, subtract, multiply, divide)"),
         tools.Required(),
     ),
     tools.WithNumber("a", 
-        tools.Description("First number"),
+        tools.Description("First operand"),
         tools.Required(),
     ),
-    tools.WithNumber("b",
-        tools.Description("Second number"),
+    tools.WithNumber("b", 
+        tools.Description("Second operand"),
         tools.Required(),
     ),
 )
 
-// Add tool to server with a handler
+// Add the tool to the server with a handler
 mcpServer.AddTool(ctx, calculatorTool, handleCalculator)
+```
+
+### Platform Tool Naming
+
+When you register a tool with `AddTool()`, it is automatically registered with a platform-prefixed name:
+
+```go
+// Original name in your code: "calculator"
+calculatorTool := tools.NewTool("calculator", ...)
+
+// After registration, the tool is available as: "cortex_calculator"
+mcpServer.AddTool(ctx, calculatorTool, handleCalculator)
+```
+
+This means that when calling the tool externally, you must always use the platform-prefixed name:
+
+```go
+// Tool must be called using the platform-prefixed name:
+// {"jsonrpc":"2.0","method":"tools/call","params":{"name":"cortex_calculator","parameters":{...}}}
 ```
 
 ### Resources

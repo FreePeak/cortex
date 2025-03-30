@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/FreePeak/cortex/internal/builder"
 	"github.com/FreePeak/cortex/internal/domain"
@@ -51,13 +52,20 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 		return fmt.Errorf("handler cannot be nil")
 	}
 
+	// Create a tool with the platform-prefixed name
+	platformPrefixedName := fmt.Sprintf("cortex_%s", strings.ReplaceAll(tool.Name, "-", "_"))
+
+	// Update the tool's name to include the prefix
+	tool.Name = platformPrefixedName
+
 	// Store the tool and its handler
 	s.tools[tool.Name] = tool
 	s.handlers[tool.Name] = handler
 
-	// Add to the internal builder
+	// Add tool to the internal builder
 	s.builder.AddTool(ctx, convertToInternalTool(tool))
 
+	log.Printf("Registered tool with platform-prefixed name: %s", tool.Name)
 	return nil
 }
 

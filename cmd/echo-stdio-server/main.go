@@ -21,7 +21,8 @@ func main() {
 	mcpServer := server.NewMCPServer("Echo Stdio Server", "1.0.0")
 
 	// Create the echo tool using the fluent API
-	echoTool := tools.NewTool("echo_golang_mcp_server_stdio",
+	// When registered, the name will automatically be prefixed with "cortex_"
+	echoTool := tools.NewTool("echo",
 		tools.WithDescription("Echoes back the input message"),
 		tools.WithString("message",
 			tools.Description("The message to echo back"),
@@ -38,7 +39,8 @@ func main() {
 
 	// Print server ready message
 	fmt.Println("Server ready. You can now send JSON-RPC requests via stdin.")
-	fmt.Println("Try: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"echo_golang_mcp_server_stdio\",\"parameters\":{\"message\":\"Hello, World!\"}}}")
+	fmt.Println("Call the tool using the platform-prefixed name:")
+	fmt.Println("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"cortex_echo\",\"parameters\":{\"message\":\"Hello, World!\"}}}")
 
 	// Start the server
 	if err := mcpServer.ServeStdio(); err != nil {
