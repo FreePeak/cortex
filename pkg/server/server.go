@@ -222,13 +222,19 @@ func (s *MCPServer) UnregisterProvider(ctx context.Context, providerID string) e
 
 // ServeStdio serves the MCP server over standard I/O.
 func (s *MCPServer) ServeStdio() error {
+	// In STDIO mode, we must write all logs to stderr, as stdout is reserved for JSON-RPC messages
 	s.logger.Printf("Starting MCP server over stdio: %s v%s", s.name, s.version)
 
 	// Create stdio options
 	var stdioOpts []stdio.StdioOption
 
-	// Add the default error logger
+	// Always use stderr for logging in STDIO mode
 	stdioOpts = append(stdioOpts, stdio.WithErrorLogger(s.logger))
+
+	// Log registered tools for debugging
+	service := s.builder.BuildService()
+	toolHandlers := service.GetAllToolHandlerNames()
+	s.logger.Printf("Available tools in the server: %v", toolHandlers)
 
 	// Start the stdio server with our custom handler
 	return s.builder.ServeStdio(stdioOpts...)

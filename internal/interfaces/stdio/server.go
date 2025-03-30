@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/FreePeak/cortex/internal/domain"
 	"github.com/FreePeak/cortex/internal/infrastructure/logging"
 	"github.com/FreePeak/cortex/internal/interfaces/rest"
+	"github.com/google/uuid"
 )
 
 // Constants for JSON-RPC
@@ -70,11 +70,12 @@ func WithStdioContextFunc(fn StdioContextFunc) StdioOption {
 // It will create a custom logger that wraps the standard log.Logger
 func WithErrorLogger(stdLogger *log.Logger) StdioOption {
 	return func(s *StdioServer) {
-		// Create a development logger that outputs to stderr
+		// Create a development logger that always outputs to stderr
+		// In STDIO mode, stdout is reserved for JSON-RPC messages only
 		logger, err := logging.New(logging.Config{
 			Level:       logging.InfoLevel,
 			Development: true,
-			OutputPaths: []string{"stderr"},
+			OutputPaths: []string{"stderr"}, // Force stderr for all logging
 		})
 		if err != nil {
 			// If we can't create the logger, use the default one
@@ -87,11 +88,11 @@ func WithErrorLogger(stdLogger *log.Logger) StdioOption {
 // NewStdioServer creates a new stdio server wrapper around an MCPServer.
 // It initializes the server with a default logger that logs to stderr.
 func NewStdioServer(server *rest.MCPServer, opts ...StdioOption) *StdioServer {
-	// Create default logger
+	// Create default logger - always use stderr for STDIO servers
 	defaultLogger, err := logging.New(logging.Config{
 		Level:       logging.InfoLevel,
 		Development: true,
-		OutputPaths: []string{"stderr"},
+		OutputPaths: []string{"stderr"}, // Force stderr for all logging output
 		InitialFields: logging.Fields{
 			"component": "stdio-server",
 		},
@@ -453,159 +454,50 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 		}
 	}
 
-	// Get available tools from the service
-	tools, err := p.server.GetService().ListTools(ctx)
-	if err != nil {
-		return nil, &domain.JSONRPCError{
-			Code:    InternalErrorCode,
-			Message: fmt.Sprintf("Internal error: %v", err),
-		}
+	// Create a client session for the tool handler
+	clientSession := &domain.ClientSession{
+		ID:        generateSessionID(),
+		Connected: true,
 	}
 
-	// Find the requested tool
-	var foundTool *domain.Tool
-	var toolFound bool
+	// Access the service to get the tool handler
+	service := p.server.GetService()
 
-	for _, tool := range tools {
-		if tool.Name == toolName {
-			foundTool = tool
-			toolFound = true
-			break
-		}
-	}
-
-	if !toolFound {
-		return nil, &domain.JSONRPCError{
-			Code:    MethodNotFoundCode,
-			Message: fmt.Sprintf("Tool not found: %s", toolName),
-		}
-	}
-
-	// Validate required parameters
-	missingParams := []string{}
-	for _, param := range foundTool.Parameters {
-		if param.Required {
-			paramValue, exists := toolParams[param.Name]
-			if !exists || paramValue == nil {
-				missingParams = append(missingParams, param.Name)
+	// Try to get a registered handler for this tool
+	handler := service.GetToolHandler(toolName)
+	if handler != nil {
+		// We have a registered handler, use it
+		p.logger.Info("Using registered handler for tool", logging.Fields{"tool": toolName})
+		result, err := handler(ctx, toolParams, clientSession)
+		if err != nil {
+			p.logger.Error("Error executing tool handler", logging.Fields{"tool": toolName, "error": err})
+			return nil, &domain.JSONRPCError{
+				Code:    InternalErrorCode,
+				Message: fmt.Sprintf("Error executing tool: %v", err),
 			}
 		}
+
+		p.logger.Info("Tool executed successfully", logging.Fields{"tool": toolName})
+		return result, nil
 	}
 
-	if len(missingParams) > 0 {
-		return nil, &domain.JSONRPCError{
-			Code:    InvalidParamsCode,
-			Message: fmt.Sprintf("Missing required parameters: %s", strings.Join(missingParams, ", ")),
-		}
+	// No handler found - log available handlers and return error
+	availableHandlers := service.GetAllToolHandlerNames()
+	p.logger.Warn("No registered handler found for tool", logging.Fields{
+		"tool":              toolName,
+		"availableHandlers": fmt.Sprintf("%+v", availableHandlers),
+	})
+
+	return nil, &domain.JSONRPCError{
+		Code:    InternalErrorCode,
+		Message: fmt.Sprintf("Tool '%s' is registered but has no implementation", toolName),
 	}
-
-	// Handle different tool types using a strategy pattern
-	var toolResult interface{}
-	var toolErr error
-
-	// Use exact tool name matching instead of prefix matching
-	switch toolName {
-	case "mcp_golang_mcp_server_stdio_echo", "mcp_golang_mcp_server_stdio_cortex_echo":
-		toolResult, toolErr = handleEchoTool(toolParams)
-	case "mcp_golang_mcp_server_stdio_weather", "mcp_golang_mcp_server_stdio_cortex_weather":
-		toolResult, toolErr = handleWeatherTool(toolParams)
-	default:
-		return nil, &domain.JSONRPCError{
-			Code:    InternalErrorCode,
-			Message: fmt.Sprintf("Tool '%s' is registered but has no implementation", toolName),
-		}
-	}
-
-	if toolErr != nil {
-		return nil, &domain.JSONRPCError{
-			Code:    InternalErrorCode,
-			Message: toolErr.Error(),
-		}
-	}
-
-	return toolResult, nil
 }
 
-// Handle echo tool types
-func handleEchoTool(params map[string]interface{}) (interface{}, error) {
-	var message string
-
-	// Extract message parameter
-	messageVal, exists := params["message"]
-	if !exists || messageVal == nil {
-		return nil, fmt.Errorf("missing 'message' parameter")
-	}
-
-	// Convert to string based on type
-	switch v := messageVal.(type) {
-	case string:
-		message = v
-	case float64, int, int64, float32:
-		message = fmt.Sprintf("%v", v)
-	default:
-		// Try JSON conversion for complex types
-		jsonBytes, err := json.Marshal(v)
-		if err != nil {
-			message = fmt.Sprintf("%v", v)
-		} else {
-			message = string(jsonBytes)
-		}
-	}
-
-	// Return formatted result using the MCP content format
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": message,
-			},
-		},
-	}, nil
+// generateSessionID creates a unique session ID
+func generateSessionID() string {
+	return uuid.New().String()
 }
-
-// Handle weather tool types
-func handleWeatherTool(params map[string]interface{}) (interface{}, error) {
-	// Extract location parameter
-	locationVal, exists := params["location"]
-	if !exists || locationVal == nil {
-		return nil, fmt.Errorf("missing 'location' parameter")
-	}
-
-	location, ok := locationVal.(string)
-	if !ok {
-		return nil, fmt.Errorf("location must be a string")
-	}
-
-	// Generate random weather data for testing
-	rand.Seed(time.Now().UnixNano())
-	conditions := []string{"Sunny", "Partly Cloudy", "Cloudy", "Rainy", "Thunderstorms", "Snowy", "Foggy", "Windy"}
-	tempF := rand.Intn(50) + 30 // Random temperature between 30°F and 80°F
-	tempC := (tempF - 32) * 5 / 9
-	humidity := rand.Intn(60) + 30 // Random humidity between 30% and 90%
-	windSpeed := rand.Intn(20) + 5 // Random wind speed between 5-25mph
-
-	// Select a random condition
-	condition := conditions[rand.Intn(len(conditions))]
-
-	// Format today's date
-	today := time.Now().Format("Monday, January 2, 2006")
-
-	// Format the weather response
-	weatherInfo := fmt.Sprintf("Weather for %s on %s:\nCondition: %s\nTemperature: %d°F (%d°C)\nHumidity: %d%%\nWind Speed: %d mph",
-		location, today, condition, tempF, tempC, humidity, windSpeed)
-
-	// Return the weather response in the format expected by the MCP protocol
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": weatherInfo,
-			},
-		},
-	}, nil
-}
-
-// Helper functions for error handling and response creation
 
 // isTerminalError determines if an error should cause the server to shut down
 func isTerminalError(err error) bool {
