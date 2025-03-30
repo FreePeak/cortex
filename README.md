@@ -8,6 +8,8 @@
 <p align="center">
 	<a href="https://pkg.go.dev/github.com/FreePeak/cortex"><img src="https://pkg.go.dev/badge/github.com/FreePeak/cortex.svg" alt="Go Reference"></a>
 	<a href="https://goreportcard.com/report/github.com/FreePeak/cortex"><img src="https://goreportcard.com/badge/github.com/FreePeak/cortex" alt="Go Report Card"></a>
+	<img src="https://github.com/FreePeak/cortex/workflows/tests/badge.svg" alt="Test Status">
+	<img src="https://github.com/FreePeak/cortex/workflows/lint/badge.svg" alt="Lint Status">
 	<a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 	<a href="https://github.com/FreePeak/cortex/graphs/contributors"><img src="https://img.shields.io/github/contributors/FreePeak/cortex" alt="Contributors"></a>
 </p>
