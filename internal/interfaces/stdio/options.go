@@ -2,7 +2,8 @@ package stdio
 
 import (
 	"context"
-	"fmt"
+	"log"
+	"os"
 
 	"github.com/FreePeak/cortex/internal/domain"
 )
@@ -11,61 +12,61 @@ import (
 // This allows you to override the default tool handling behavior.
 func WithToolHandler(toolName string, handler func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error)) StdioOption {
 	return func(s *StdioServer) {
+		debugMode := os.Getenv("CORTEX_DEBUG") == "1"
+
 		if s.processor == nil {
 			s.processor = NewMessageProcessor(s.server, s.logger)
 		}
 
-		// Create an adapter that converts our handler function to a MethodHandlerFunc
-		adapter := MethodHandlerFunc(func(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError) {
-			// Extract tool parameters
-			paramsMap, ok := params.(map[string]interface{})
-			if !ok {
-				return nil, &domain.JSONRPCError{
-					Code:    InvalidParamsCode,
-					Message: "Invalid params",
-				}
+		// Initialize toolHandlers map if needed
+		if s.processor.toolHandlers == nil {
+			s.processor.toolHandlers = make(map[string]func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error))
+		}
+
+		// Store the handler in the toolHandlers map
+		s.processor.toolHandlers[toolName] = handler
+
+		if debugMode {
+			log.Printf("Registered handler for tool: %s", toolName)
+		}
+
+		// Register a single handler for tools/call if not already done
+		if _, exists := s.processor.handlers["tools/call"]; !exists {
+			s.processor.RegisterHandler("tools/call", MethodHandlerFunc(s.processor.handleToolsCall))
+		}
+	}
+}
+
+// WithAllToolHandlers sets all tool handlers at once.
+// This is useful when you want to set multiple handlers in a single operation.
+func WithAllToolHandlers(handlers map[string]func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error)) StdioOption {
+	return func(s *StdioServer) {
+		debugMode := os.Getenv("CORTEX_DEBUG") == "1"
+
+		if s.processor == nil {
+			s.processor = NewMessageProcessor(s.server, s.logger)
+		}
+
+		// Initialize toolHandlers map if needed
+		if s.processor.toolHandlers == nil {
+			s.processor.toolHandlers = make(map[string]func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error))
+		}
+
+		// Copy all handlers to the toolHandlers map
+		for name, handler := range handlers {
+			s.processor.toolHandlers[name] = handler
+		}
+
+		if debugMode {
+			log.Printf("Registered %d tool handlers at once", len(handlers))
+			for name := range handlers {
+				log.Printf("Tool handler registered: %s", name)
 			}
+		}
 
-			// Check if this is a call to our specific tool
-			nameParam, ok := paramsMap["name"].(string)
-			if !ok || nameParam != toolName {
-				// Let the default handler handle other tools
-				return nil, &domain.JSONRPCError{
-					Code:    MethodNotFoundCode,
-					Message: fmt.Sprintf("Tool handler mismatch: expected %s, got %s", toolName, nameParam),
-				}
-			}
-
-			// Get tool parameters - check both parameters and arguments fields
-			toolParams, ok := paramsMap["parameters"].(map[string]interface{})
-			if !ok {
-				// Try arguments field if parameters is not available
-				toolParams, ok = paramsMap["arguments"].(map[string]interface{})
-				if !ok {
-					toolParams = map[string]interface{}{}
-				}
-			}
-
-			// Create a dummy session for now
-			session := &domain.ClientSession{
-				ID:        "stdio-session",
-				UserAgent: "stdio-client",
-				Connected: true,
-			}
-
-			// Call the handler
-			result, err := handler(ctx, toolParams, session)
-			if err != nil {
-				return nil, &domain.JSONRPCError{
-					Code:    InternalErrorCode,
-					Message: err.Error(),
-				}
-			}
-
-			return result, nil
-		})
-
-		// Override the tools/call handler with our custom one
-		s.processor.RegisterHandler("tools/call", adapter)
+		// Register a single handler for tools/call if not already done
+		if _, exists := s.processor.handlers["tools/call"]; !exists {
+			s.processor.RegisterHandler("tools/call", MethodHandlerFunc(s.processor.handleToolsCall))
+		}
 	}
 }

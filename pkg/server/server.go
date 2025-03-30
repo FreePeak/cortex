@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/FreePeak/cortex/internal/builder"
 	"github.com/FreePeak/cortex/internal/domain"
@@ -132,7 +133,11 @@ func (s *MCPServer) RegisterToolHandler(name string, handler ToolHandler) error 
 
 // ServeStdio serves the MCP server over standard I/O.
 func (s *MCPServer) ServeStdio() error {
-	log.Printf("Starting MCP server over stdio: %s v%s", s.name, s.version)
+	debugMode := os.Getenv("CORTEX_DEBUG") == "1"
+
+	if debugMode {
+		log.Printf("ServeStdio called with %d registered tools", len(s.handlers))
+	}
 
 	// Create stdio options with tool handlers
 	var stdioOpts []stdio.StdioOption
@@ -140,11 +145,26 @@ func (s *MCPServer) ServeStdio() error {
 	// Add the default error logger
 	stdioOpts = append(stdioOpts, stdio.WithErrorLogger(log.Default()))
 
-	// Add all tool handlers as stdio options
+	// First, create a map of toolHandlers
+	toolHandlersMap := make(map[string]func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error))
+
+	// Add all tool handlers to the map
 	for name, handler := range s.handlers {
-		// Capture variables in the closure correctly
+		// Only register tools with "cortex_" prefix or manually update the name to include prefix
 		toolName := name
+		if len(toolName) < 7 || toolName[:7] != "cortex_" {
+			if debugMode {
+				log.Printf("Skipping non-prefixed tool: %s", toolName)
+			}
+			// Skip non-prefixed tools
+			continue
+		}
+
 		toolHandler := handler
+
+		if debugMode {
+			log.Printf("Registering tool handler for %s", toolName)
+		}
 
 		// Create an adapter function that converts between our API and the internal API
 		adapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
@@ -153,6 +173,10 @@ func (s *MCPServer) ServeStdio() error {
 				ID:        session.ID,
 				UserAgent: session.UserAgent,
 				Connected: session.Connected,
+			}
+
+			if debugMode {
+				log.Printf("Tool handler called for %s with params %v", toolName, params)
 			}
 
 			// Create request and call the handler
@@ -165,8 +189,19 @@ func (s *MCPServer) ServeStdio() error {
 			return toolHandler(ctx, request)
 		}
 
+		// Add the tool handler to the map
+		toolHandlersMap[toolName] = adapter
+
 		// Add the tool handler as an option
 		stdioOpts = append(stdioOpts, stdio.WithToolHandler(toolName, adapter))
+	}
+
+	// Add an option to directly set all tool handlers at once
+	if len(toolHandlersMap) > 0 {
+		stdioOpts = append(stdioOpts, stdio.WithAllToolHandlers(toolHandlersMap))
+		if debugMode {
+			log.Printf("Registered %d tool handlers with WithAllToolHandlers", len(toolHandlersMap))
+		}
 	}
 
 	// Start the stdio server with our custom handler
