@@ -35,7 +35,7 @@ help:
 	@echo "  make example-stdio - Run example stdio server"
 	@echo "  make example-multi - Run example multi-protocol server"
 
-all: test build
+all: test build lint
 
 build: $(BIN_DIR)
 	$(GOBUILD) -o $(STDIO_BIN) $(STDIO_SERVER)

@@ -301,7 +301,7 @@ func (s *sseHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if response != nil {
 		responseBytes, err := json.Marshal(response)
 		if err != nil {
-			writeJSONRPCError(w, nil, -32603, "Error marshalling response", s.jsonrpcVersion)
+			writeJSONRPCError(w, nil, -32603, "Error marshaling response", s.jsonrpcVersion)
 			return
 		}
 

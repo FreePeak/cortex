@@ -79,7 +79,9 @@ func (n *NotificationSender) RegisterSession(session *MCPSession) {
 // UnregisterSession unregisters a session.
 func (n *NotificationSender) UnregisterSession(sessionID string) {
 	if session, ok := n.sessions.LoadAndDelete(sessionID); ok {
-		session.(*MCPSession).Close()
+		if s, ok := session.(*MCPSession); ok {
+			s.Close()
+		}
 	}
 }
 
@@ -90,7 +92,11 @@ func (n *NotificationSender) SendNotification(ctx context.Context, sessionID str
 		return fmt.Errorf("session %s not found", sessionID)
 	}
 
-	session := value.(*MCPSession)
+	session, ok := value.(*MCPSession)
+	if !ok {
+		return domain.ErrInternal
+	}
+
 	jsonRPC := JSONRPCNotification{
 		JSONRPC: n.jsonrpcVersion,
 		Method:  notification.Method,
@@ -129,7 +135,13 @@ func (n *NotificationSender) BroadcastNotification(ctx context.Context, notifica
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			session := value.(*MCPSession)
+			session, ok := value.(*MCPSession)
+			if !ok {
+				errsMu.Lock()
+				errs = append(errs, fmt.Errorf("invalid session type"))
+				errsMu.Unlock()
+				return
+			}
 
 			// Try to send notification with timeout from context
 			select {
@@ -137,8 +149,7 @@ func (n *NotificationSender) BroadcastNotification(ctx context.Context, notifica
 				// Successfully sent
 			case <-ctx.Done():
 				errsMu.Lock()
-				// Use context.Err() directly to allow proper error checking with errors.Is
-				errs = append(errs, fmt.Errorf("context cancelled for session %s: %w", session.ID(), ctx.Err()))
+				errs = append(errs, fmt.Errorf("context canceled for session %s: %w", session.ID(), ctx.Err()))
 				errsMu.Unlock()
 			default:
 				errsMu.Lock()

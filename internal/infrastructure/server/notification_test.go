@@ -154,8 +154,8 @@ func TestNotificationSender_SendNotification_ChannelFullOrClosed(t *testing.T) {
 	assert.Contains(t, err.Error(), sessionID)
 }
 
-// Test SendNotification - Context cancelled
-func TestNotificationSender_SendNotification_ContextCancelled(t *testing.T) {
+// Test SendNotification - Context canceled
+func TestNotificationSender_SendNotification_ContextCanceled(t *testing.T) {
 	sender := NewNotificationSender(testJsonrpcVersion)
 	sessionID := "ctx-cancel-session"
 	// Use buffer size 0 to make it easier to hit the context cancellation path
@@ -267,8 +267,8 @@ func TestNotificationSender_BroadcastNotification_OneChannelFull(t *testing.T) {
 	}
 }
 
-// Test BroadcastNotification - Context cancelled during broadcast
-func TestNotificationSender_BroadcastNotification_ContextCancelled(t *testing.T) {
+// Test BroadcastNotification - Context canceled during broadcast
+func TestNotificationSender_BroadcastNotification_ContextCanceled(t *testing.T) {
 	sender := NewNotificationSender(testJsonrpcVersion)
 
 	// Create a context that's already canceled
@@ -285,7 +285,7 @@ func TestNotificationSender_BroadcastNotification_ContextCancelled(t *testing.T)
 
 	notification := &domain.Notification{Method: "broadcast/cancel"}
 
-	// Now try to broadcast with the already-cancelled context
+	// Now try to broadcast with the already-canceled context
 	err := sender.BroadcastNotification(ctx, notification)
 
 	// Verify we get a context.Canceled error

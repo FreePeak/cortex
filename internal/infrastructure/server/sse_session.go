@@ -86,7 +86,7 @@ func (s *sseSession2) Start() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			// Context cancelled, stop processing
+			// Context canceled, stop processing
 			return
 		case <-s.done:
 			// Session closed, stop processing

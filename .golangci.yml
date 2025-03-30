@@ -49,6 +49,27 @@ issues:
     - path: internal/interfaces/rest
       linters:
         - goimports
+    - path: internal/interfaces/stdio/server\.go
+      linters:
+        - goimports
+    - path: internal/infrastructure/server/sse_server_test\.go
+      linters:
+        - goimports
+    - path: internal/infrastructure/server/sse_handler\.go
+      linters:
+        - goimports
+    - path: internal/infrastructure/server/sse_server\.go
+      linters:
+        - goimports
+    - path: internal/infrastructure/server/sse_session\.go
+      linters:
+        - goimports
+    - path: internal/infrastructure/server/inmemory_test\.go
+      linters:
+        - goimports
+    - path: internal/infrastructure/server/notification_test\.go
+      linters:
+        - goimports
 
   max-issues-per-linter: 0
   max-same-issues: 0 

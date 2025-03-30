@@ -119,7 +119,7 @@ func NewStdioServer(server *rest.MCPServer, opts ...StdioOption) *StdioServer {
 }
 
 // Listen starts listening for JSON-RPC messages on the provided input and writes responses to the provided output.
-// It runs until the context is cancelled or an error occurs.
+// It runs until the context is canceled or an error occurs.
 // Returns an error if there are issues with reading input or writing output.
 func (s *StdioServer) Listen(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	// Add in any custom context
