@@ -67,18 +67,12 @@ func (r *InMemoryToolRepository) GetTool(ctx context.Context, name string) (*dom
 		return tool.(*domain.Tool), nil
 	}
 
-	// If the name starts with "cortex_", try without the prefix
-	if len(name) > 7 && name[:7] == "cortex_" {
-		unprefixedName := name[7:]
-		if tool, ok := r.tools.Load(unprefixedName); ok {
+	// If the name doesn't have the prefix, try with the prefix
+	if len(name) < 7 || name[:7] != "cortex_" {
+		prefixedName := "cortex_" + name
+		if tool, ok := r.tools.Load(prefixedName); ok {
 			return tool.(*domain.Tool), nil
 		}
-	}
-
-	// If the name doesn't have the prefix, try with the prefix
-	prefixedName := "cortex_" + name
-	if tool, ok := r.tools.Load(prefixedName); ok {
-		return tool.(*domain.Tool), nil
 	}
 
 	return nil, domain.NewToolNotFoundError(name)
@@ -111,17 +105,7 @@ func (r *InMemoryToolRepository) AddTool(ctx context.Context, tool *domain.Tool)
 		r.tools.Store(prefixedName, prefixedTool)
 	}
 
-	// If it has a prefix, also store without the prefix
-	if len(tool.Name) > 7 && tool.Name[:7] == "cortex_" {
-		unprefixedName := tool.Name[7:]
-		// Create a copy of the tool with the unprefixed name
-		unprefixedTool := &domain.Tool{
-			Name:        unprefixedName,
-			Description: tool.Description,
-			Parameters:  tool.Parameters,
-		}
-		r.tools.Store(unprefixedName, unprefixedTool)
-	}
+	// We no longer store the unprefixed version when prefix exists
 
 	return nil
 }

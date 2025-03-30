@@ -18,12 +18,19 @@ func getTimestamp() string {
 }
 
 func main() {
+	// Check if debug mode is enabled
+	debugMode := os.Getenv("CORTEX_DEBUG") == "1"
+
+	if debugMode {
+		fmt.Println("Debug mode enabled")
+	}
+
 	// Create the server with name and version
 	mcpServer := server.NewMCPServer("Echo Stdio Server", "1.0.0")
 
-	// Create the echo tool using the fluent API
-	// When registered, the name will automatically be prefixed with "cortex_"
-	echoTool := tools.NewTool("echo",
+	// ONLY create the prefixed versions of tools
+	// Use the prefixed name directly instead of relying on automatic prefixing
+	echoTool := tools.NewTool("cortex_echo",
 		tools.WithDescription("Echoes back the input message"),
 		tools.WithString("message",
 			tools.Description("The message to echo back"),
@@ -31,8 +38,8 @@ func main() {
 		),
 	)
 
-	// Create the weather tool
-	weatherTool := tools.NewTool("weather",
+	// Create the weather tool - only the prefixed version
+	weatherTool := tools.NewTool("cortex_weather",
 		tools.WithDescription("Gets today's weather forecast"),
 		tools.WithString("location",
 			tools.Description("The location to get weather for"),
@@ -50,6 +57,10 @@ func main() {
 	err = mcpServer.AddTool(ctx, weatherTool, handleWeather)
 	if err != nil {
 		log.Fatalf("Error adding weather tool: %v", err)
+	}
+
+	if debugMode {
+		fmt.Println("Added tools: cortex_echo, cortex_weather")
 	}
 
 	// Print server ready message

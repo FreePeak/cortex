@@ -106,13 +106,18 @@ func NewStdioServer(server *rest.MCPServer, opts ...StdioOption) *StdioServer {
 		logger: defaultLogger,
 	}
 
+	// Initialize the message processor
+	s.processor = NewMessageProcessor(s.server, s.logger)
+
 	// Apply all options
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	// Initialize the message processor
-	s.processor = NewMessageProcessor(s.server, s.logger)
+	debugMode := os.Getenv("CORTEX_DEBUG") == "1"
+	if debugMode && len(s.processor.toolHandlers) > 0 {
+		log.Printf("StdioServer initialized with %d tool handlers", len(s.processor.toolHandlers))
+	}
 
 	return s
 }
@@ -210,7 +215,13 @@ func (s *StdioServer) writeResponse(response interface{}, writer io.Writer) erro
 // It sets up signal handling for graceful shutdown on SIGTERM and SIGINT.
 // Returns an error if the server encounters any issues during operation.
 func ServeStdio(server *rest.MCPServer, opts ...StdioOption) error {
+	debugMode := os.Getenv("CORTEX_DEBUG") == "1"
 	s := NewStdioServer(server, opts...)
+
+	if debugMode {
+		handlerCount := len(s.processor.toolHandlers)
+		log.Printf("Starting stdio server with %d tool handlers registered", handlerCount)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,9 +250,10 @@ func ServeStdio(server *rest.MCPServer, opts ...StdioOption) error {
 
 // MessageProcessor handles JSON-RPC message processing
 type MessageProcessor struct {
-	server   *rest.MCPServer
-	logger   *logging.Logger
-	handlers map[string]MethodHandler
+	server       *rest.MCPServer
+	logger       *logging.Logger
+	handlers     map[string]MethodHandler
+	toolHandlers map[string]func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error)
 }
 
 // MethodHandler defines the interface for JSON-RPC method handlers
@@ -260,9 +272,10 @@ func (f MethodHandlerFunc) Handle(ctx context.Context, params interface{}, id in
 // NewMessageProcessor creates a new message processor with registered handlers
 func NewMessageProcessor(server *rest.MCPServer, logger *logging.Logger) *MessageProcessor {
 	p := &MessageProcessor{
-		server:   server,
-		logger:   logger,
-		handlers: make(map[string]MethodHandler),
+		server:       server,
+		logger:       logger,
+		handlers:     make(map[string]MethodHandler),
+		toolHandlers: make(map[string]func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error)),
 	}
 
 	// Register standard handlers
@@ -425,6 +438,8 @@ func (p *MessageProcessor) handleToolsList(ctx context.Context, params interface
 }
 
 func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface{}, id interface{}) (interface{}, *domain.JSONRPCError) {
+	debugMode := os.Getenv("CORTEX_DEBUG") == "1"
+
 	// Extract parameters
 	paramsMap, ok := params.(map[string]interface{})
 	if !ok {
@@ -443,6 +458,14 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 		}
 	}
 
+	if debugMode {
+		p.logger.Info("Handling tool call", logging.Fields{"toolName": toolName, "registeredTools": len(p.toolHandlers)})
+		// Print all registered tool handlers
+		for name := range p.toolHandlers {
+			p.logger.Info("Registered tool handler", logging.Fields{"name": name})
+		}
+	}
+
 	// Get tool parameters - check both parameters and arguments fields
 	toolParams, ok := paramsMap["parameters"].(map[string]interface{})
 	if !ok {
@@ -451,6 +474,35 @@ func (p *MessageProcessor) handleToolsCall(ctx context.Context, params interface
 		if !ok {
 			toolParams = map[string]interface{}{}
 		}
+	}
+
+	// Check if we have a registered handler for this tool
+	if handler, exists := p.toolHandlers[toolName]; exists {
+		if debugMode {
+			p.logger.Info("Found registered handler for tool", logging.Fields{"toolName": toolName})
+		}
+
+		// Create a dummy session
+		session := &domain.ClientSession{
+			ID:        "stdio-session",
+			UserAgent: "stdio-client",
+			Connected: true,
+		}
+
+		// Call the registered handler
+		result, err := handler(ctx, toolParams, session)
+		if err != nil {
+			return nil, &domain.JSONRPCError{
+				Code:    InternalErrorCode,
+				Message: err.Error(),
+			}
+		}
+
+		return result, nil
+	}
+
+	if debugMode {
+		p.logger.Info("No handler found for tool", logging.Fields{"toolName": toolName})
 	}
 
 	// Get available tools from the service
