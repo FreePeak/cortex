@@ -28,8 +28,9 @@
   - [Multi-Protocol](#multi-protocol)
   - [Testing and Debugging](#testing-and-debugging)
 - [Examples](#examples)
-  - [Echo Server](#echo-server)
-  - [Calculator Server](#calculator-server)
+  - [Basic Examples](#basic-examples)
+  - [Advanced Examples](#advanced-examples)
+  - [Plugin System](#plugin-system)
 - [Package Structure](#package-structure)
 - [Contributing](#contributing)
 - [License](#license)
@@ -70,8 +71,11 @@ import (
 )
 
 func main() {
+	// Create a logger
+	logger := log.New(os.Stdout, "[cortex] ", log.LstdFlags)
+
 	// Create the server
-	mcpServer := server.NewMCPServer("Echo Server Example", "1.0.0")
+	mcpServer := server.NewMCPServer("Echo Server Example", "1.0.0", logger)
 
 	// Create an echo tool
 	echoTool := tools.NewTool("echo",
@@ -86,13 +90,13 @@ func main() {
 	ctx := context.Background()
 	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
 	if err != nil {
-		log.Fatalf("Error adding tool: %v", err)
+		logger.Fatalf("Error adding tool: %v", err)
 	}
 
 	// Start the server
 	fmt.Println("Starting Echo Server...")
 	fmt.Println("Send JSON-RPC messages via stdin to interact with the server.")
-	fmt.Println("Try: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"parameters\":{\"message\":\"Hello, World!\"}}}")
+	fmt.Println(`Try: {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}`)
 
 	// Serve over stdio
 	if err := mcpServer.ServeStdio(); err != nil {
@@ -167,25 +171,6 @@ calculatorTool := tools.NewTool("calculator",
 mcpServer.AddTool(ctx, calculatorTool, handleCalculator)
 ```
 
-### Platform Tool Naming
-
-When you register a tool with `AddTool()`, it is automatically registered with a platform-prefixed name:
-
-```go
-// Original name in your code: "calculator"
-calculatorTool := tools.NewTool("calculator", ...)
-
-// After registration, the tool is available as: "cortex_calculator"
-mcpServer.AddTool(ctx, calculatorTool, handleCalculator)
-```
-
-This means that when calling the tool externally, you must always use the platform-prefixed name:
-
-```go
-// Tool must be called using the platform-prefixed name:
-// {"jsonrpc":"2.0","method":"tools/call","params":{"name":"cortex_calculator","parameters":{...}}}
-```
-
 ### Resources
 
 Resources are how you expose data to LLMs. They're similar to GET endpoints in a REST API - they provide data but shouldn't perform significant computation or have side effects:
@@ -198,8 +183,6 @@ resource := &domain.Resource{
     Description: "A sample resource for demonstration purposes",
     MIMEType:    "text/plain",
 }
-
-// Note: Resource support is being updated in the public API
 ```
 
 ### Prompts
@@ -296,33 +279,47 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","par
 
 ## Examples
 
-Check out the `examples` directory for complete example servers:
+Cortex includes several examples in the `examples` directory:
 
-### Echo Server
+### Basic Examples
 
-A simple echo server example is available in `examples/echo_server.go`:
+- **stdio-server**: A simple stdio-based MCP server example
+- **sse-server**: An HTTP/SSE-based MCP server example
 
-```bash
-# Run the example
-go run examples/echo_server.go
-```
+### Advanced Examples
 
-Test with:
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}' | go run examples/echo_server.go
-```
+- **multi-protocol**: A server that supports both stdio and HTTP protocols
+- **providers/weather**: Weather forecast tool provider
+- **providers/database**: Simple key-value store tool provider
 
-### Calculator Server
-
-A more advanced calculator example with both HTTP and stdio modes is available in `examples/calculator/`:
+Run the examples using the provided scripts:
 
 ```bash
-# Run in HTTP mode
-go run examples/calculator/main.go --mode http
+# Run stdio server
+./run-stdio.sh
 
-# Run in stdio mode
-go run examples/calculator/main.go --mode stdio
+# Run SSE server
+./run-sse.sh
+
+# Run multi-protocol server (stdio)
+./run-flexible-stdio.sh
+
+# Run multi-protocol server (HTTP)
+./run-flexible-http.sh
 ```
+
+You can also run them directly with Go:
+
+```bash
+go run examples/stdio-server/main.go
+go run examples/sse-server/main.go
+go run examples/multi-protocol/main.go -protocol stdio
+go run examples/multi-protocol/main.go -protocol http -address localhost:8080
+```
+
+### Plugin System
+
+Cortex includes a flexible plugin system that allows external services to register as tools. See the `pkg/plugin` directory for more information.
 
 ## Package Structure
 
@@ -331,13 +328,16 @@ The library is organized following clean architecture principles:
 ```
 cortex/
 ├── pkg/                    # Public API (exposed to users)
-│   ├── builder/            # Public builder pattern for server construction
+│   ├── plugin/             # Plugin system for external tools
 │   ├── server/             # Public server implementation
 │   ├── tools/              # Utilities for creating MCP tools
 │   └── types/              # Shared types and interfaces
 ├── internal/               # Private implementation details
 ├── examples/               # Example code snippets and use cases
-└── cmd/                    # Example MCP server applications
+│   ├── stdio-server/       # Stdio server example
+│   ├── sse-server/         # SSE server example
+│   ├── multi-protocol/     # Multi-protocol server example
+│   └── providers/          # Example tool providers
 ```
 
 The `pkg/` directory contains all publicly exposed APIs that users of the library should interact with.
@@ -350,7 +350,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 📧 Support & Contact
+## Support & Contact
 
 - For questions or issues, email [mnhatlinh.doan@gmail.com](mailto:mnhatlinh.doan@gmail.com)
 - Open an issue directly: [Issue Tracker](https://github.com/FreePeak/cortex/issues)
@@ -362,4 +362,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 alt="Buy Me A Coffee"/>
 </a>
 </p>
-

@@ -23,8 +23,11 @@ const (
 )
 
 func main() {
+	// Create a logger
+	logger := log.New(os.Stdout, "[cortex-sse] ", log.LstdFlags)
+
 	// Create a new server using the SDK
-	mcpServer := server.NewMCPServer(serverName, serverVersion)
+	mcpServer := server.NewMCPServer(serverName, serverVersion, logger)
 
 	// Set the server address
 	mcpServer.SetAddress(serverAddr)
@@ -51,12 +54,12 @@ func main() {
 	ctx := context.Background()
 	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
 	if err != nil {
-		log.Fatalf("Error adding echo tool: %v", err)
+		logger.Fatalf("Error adding echo tool: %v", err)
 	}
 
 	err = mcpServer.AddTool(ctx, weatherTool, handleWeather)
 	if err != nil {
-		log.Fatalf("Error adding weather tool: %v", err)
+		logger.Fatalf("Error adding weather tool: %v", err)
 	}
 
 	// Handle graceful shutdown
@@ -72,7 +75,7 @@ func main() {
 
 		// Use the SDK's built-in HTTP server functionality
 		if err := mcpServer.ServeHTTP(); err != nil {
-			log.Fatalf("Server failed to start: %v", err)
+			logger.Fatalf("Server failed to start: %v", err)
 		}
 	}()
 
@@ -86,7 +89,7 @@ func main() {
 
 	// Shutdown server
 	if err := mcpServer.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		logger.Fatalf("Server forced to shutdown: %v", err)
 	}
 
 	// Small delay to allow final cleanup

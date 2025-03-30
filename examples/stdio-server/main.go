@@ -18,19 +18,14 @@ func getTimestamp() string {
 }
 
 func main() {
-	// Check if debug mode is enabled
-	debugMode := os.Getenv("CORTEX_DEBUG") == "1"
-
-	if debugMode {
-		fmt.Println("Debug mode enabled")
-	}
+	// Create a logger
+	logger := log.New(os.Stdout, "[cortex-stdio] ", log.LstdFlags)
 
 	// Create the server with name and version
-	mcpServer := server.NewMCPServer("Echo Stdio Server", "1.0.0")
+	mcpServer := server.NewMCPServer("Echo Stdio Server", "1.0.0", logger)
 
-	// ONLY create the prefixed versions of tools
-	// Use the prefixed name directly instead of relying on automatic prefixing
-	echoTool := tools.NewTool("cortex_echo",
+	// Create the echo tool using the fluent API
+	echoTool := tools.NewTool("echo",
 		tools.WithDescription("Echoes back the input message"),
 		tools.WithString("message",
 			tools.Description("The message to echo back"),
@@ -38,8 +33,8 @@ func main() {
 		),
 	)
 
-	// Create the weather tool - only the prefixed version
-	weatherTool := tools.NewTool("cortex_weather",
+	// Create the weather tool
+	weatherTool := tools.NewTool("weather",
 		tools.WithDescription("Gets today's weather forecast"),
 		tools.WithString("location",
 			tools.Description("The location to get weather for"),
@@ -51,24 +46,20 @@ func main() {
 	ctx := context.Background()
 	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
 	if err != nil {
-		log.Fatalf("Error adding echo tool: %v", err)
+		logger.Fatalf("Error adding echo tool: %v", err)
 	}
 
 	err = mcpServer.AddTool(ctx, weatherTool, handleWeather)
 	if err != nil {
-		log.Fatalf("Error adding weather tool: %v", err)
-	}
-
-	if debugMode {
-		fmt.Println("Added tools: cortex_echo, cortex_weather")
+		logger.Fatalf("Error adding weather tool: %v", err)
 	}
 
 	// Print server ready message
 	fmt.Println("Server ready. You can now send JSON-RPC requests via stdin.")
 	fmt.Println("Call the echo tool using:")
-	fmt.Println("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"cortex_echo\",\"parameters\":{\"message\":\"Hello, World!\"}}}")
+	fmt.Println(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}`)
 	fmt.Println("Call the weather tool using:")
-	fmt.Println("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"cortex_weather\",\"parameters\":{\"location\":\"New York\"}}}")
+	fmt.Println(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"weather","parameters":{"location":"New York"}}}`)
 
 	// Start the server
 	if err := mcpServer.ServeStdio(); err != nil {
