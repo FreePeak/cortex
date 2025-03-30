@@ -20,10 +20,11 @@
 - [Core Concepts](#core-concepts)
   - [Server](#server)
   - [Tools](#tools)
+  - [Providers](#providers)
   - [Resources](#resources)
   - [Prompts](#prompts)
 - [Running Your Server](#running-your-server)
-  - [stdio](#stdio)
+  - [STDIO](#stdio)
   - [HTTP with SSE](#http-with-sse)
   - [Multi-Protocol](#multi-protocol)
   - [Testing and Debugging](#testing-and-debugging)
@@ -71,8 +72,9 @@ import (
 )
 
 func main() {
-	// Create a logger
-	logger := log.New(os.Stdout, "[cortex] ", log.LstdFlags)
+	// Create a logger that writes to stderr instead of stdout
+	// This is critical for STDIO servers as stdout must only contain JSON-RPC messages
+	logger := log.New(os.Stderr, "[cortex] ", log.LstdFlags)
 
 	// Create the server
 	mcpServer := server.NewMCPServer("Echo Server Example", "1.0.0", logger)
@@ -93,10 +95,10 @@ func main() {
 		logger.Fatalf("Error adding tool: %v", err)
 	}
 
-	// Start the server
-	fmt.Println("Starting Echo Server...")
-	fmt.Println("Send JSON-RPC messages via stdin to interact with the server.")
-	fmt.Println(`Try: {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}`)
+	// Write server status to stderr instead of stdout to maintain clean JSON protocol
+	fmt.Fprintf(os.Stderr, "Starting Echo Server...\n")
+	fmt.Fprintf(os.Stderr, "Send JSON-RPC messages via stdin to interact with the server.\n")
+	fmt.Fprintf(os.Stderr, `Try: {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}\n`)
 
 	// Serve over stdio
 	if err := mcpServer.ServeStdio(); err != nil {
@@ -141,8 +143,8 @@ The [Model Context Protocol (MCP)](https://modelcontextprotocol.io) is a standar
 The MCP Server is your core interface to the MCP protocol. It handles connection management, protocol compliance, and message routing:
 
 ```go
-// Create a new MCP server
-mcpServer := server.NewMCPServer("My App", "1.0.0")
+// Create a new MCP server with logger
+mcpServer := server.NewMCPServer("My App", "1.0.0", logger)
 ```
 
 ### Tools
@@ -169,6 +171,24 @@ calculatorTool := tools.NewTool("calculator",
 
 // Add the tool to the server with a handler
 mcpServer.AddTool(ctx, calculatorTool, handleCalculator)
+```
+
+### Providers
+
+Providers allow you to group related tools and resources into a single package that can be easily registered with a server:
+
+```go
+// Create a weather provider
+weatherProvider, err := weather.NewWeatherProvider(logger)
+if err != nil {
+    logger.Fatalf("Failed to create weather provider: %v", err)
+}
+
+// Register the provider with the server
+err = mcpServer.RegisterProvider(ctx, weatherProvider)
+if err != nil {
+    logger.Fatalf("Failed to register weather provider: %v", err)
+}
 ```
 
 ### Resources
@@ -212,7 +232,7 @@ codeReviewPrompt := &domain.Prompt{
 
 MCP servers in Go can be connected to different transports depending on your use case:
 
-### stdio
+### STDIO
 
 For command-line tools and direct integrations:
 
@@ -222,6 +242,16 @@ if err := mcpServer.ServeStdio(); err != nil {
     fmt.Fprintf(os.Stderr, "Error: %v\n", err)
     os.Exit(1)
 }
+```
+
+IMPORTANT: When using STDIO, all logs must be directed to stderr to maintain the clean JSON-RPC protocol on stdout:
+
+```go
+// Create a logger that writes to stderr
+logger := log.New(os.Stderr, "[cortex] ", log.LstdFlags)
+
+// All debug/status messages should use stderr
+fmt.Fprintf(os.Stderr, "Server starting...\n")
 ```
 
 ### HTTP with SSE
@@ -247,108 +277,113 @@ if err := mcpServer.Shutdown(ctx); err != nil {
 
 ### Multi-Protocol
 
-You can also run multiple protocol servers simultaneously:
+You can also run multiple protocol servers simultaneously by using goroutines:
 
 ```go
-// Configure server for both HTTP and stdio
-mcpServer := server.NewMCPServer("Multi-Protocol Server", "1.0.0")
-mcpServer.SetAddress(":8080")
-mcpServer.AddTool(ctx, echoTool, handleEcho)
-
-// Start HTTP server in a goroutine
+// Start an HTTP server
 go func() {
     if err := mcpServer.ServeHTTP(); err != nil {
         log.Fatalf("HTTP server error: %v", err)
     }
 }()
 
-// Start stdio server in the main thread
-if err := mcpServer.ServeStdio(); err != nil {
-    log.Fatalf("Stdio server error: %v", err)
-}
+// Start a STDIO server
+go func() {
+    if err := mcpServer.ServeStdio(); err != nil {
+        log.Fatalf("STDIO server error: %v", err)
+    }
+}()
+
+// Wait for shutdown signal
+stop := make(chan os.Signal, 1)
+signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+<-stop
 ```
 
 ### Testing and Debugging
 
-For testing your MCP server, you can use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or send JSON-RPC messages directly:
+For testing and debugging, the Cortex framework provides several utilities:
 
-```bash
-# Test an echo tool with stdio
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}' | go run your_server.go
+```go
+// You can use the test-call.sh script to send test requests to your STDIO server
+// For example:
+// ./test-call.sh echo '{"message":"Hello, World!"}'
 ```
 
 ## Examples
 
-Cortex includes several examples in the `examples` directory:
-
 ### Basic Examples
 
-- **stdio-server**: A simple stdio-based MCP server example
-- **sse-server**: An HTTP/SSE-based MCP server example
+The repository includes several basic examples in the `examples` directory:
+
+- **STDIO Server**: A simple MCP server that communicates via STDIO (`examples/stdio-server`)
+- **SSE Server**: A server that uses HTTP with Server-Sent Events for communication (`examples/sse-server`)
+- **Multi-Protocol**: A server that can run on multiple protocols simultaneously (`examples/multi-protocol`)
 
 ### Advanced Examples
 
-- **multi-protocol**: A server that supports both stdio and HTTP protocols
-- **providers/weather**: Weather forecast tool provider
-- **providers/database**: Simple key-value store tool provider
+The examples directory also includes more advanced use cases:
 
-Run the examples using the provided scripts:
-
-```bash
-# Run stdio server
-./run-stdio.sh
-
-# Run SSE server
-./run-sse.sh
-
-# Run multi-protocol server (stdio)
-./run-flexible-stdio.sh
-
-# Run multi-protocol server (HTTP)
-./run-flexible-http.sh
-```
-
-You can also run them directly with Go:
-
-```bash
-go run examples/stdio-server/main.go
-go run examples/sse-server/main.go
-go run examples/multi-protocol/main.go -protocol stdio
-go run examples/multi-protocol/main.go -protocol http -address localhost:8080
-```
+- **Providers**: Examples of how to create and use providers to organize related tools (`examples/providers`)
+  - **Weather Provider**: Demonstrates how to create a provider for weather-related tools
+  - **Database Provider**: Shows how to create a provider for database operations
 
 ### Plugin System
 
-Cortex includes a flexible plugin system that allows external services to register as tools. See the `pkg/plugin` directory for more information.
+Cortex includes a plugin system for extending server capabilities:
+
+```go
+// Create a new provider based on the BaseProvider
+type MyProvider struct {
+    *plugin.BaseProvider
+}
+
+// Create a new provider instance
+func NewMyProvider(logger *log.Logger) (*MyProvider, error) {
+    info := plugin.ProviderInfo{
+        ID:          "my-provider",
+        Name:        "My Provider",
+        Version:     "1.0.0",
+        Description: "A custom provider for my tools",
+        Author:      "Your Name",
+        URL:         "https://github.com/yourusername/myrepo",
+    }
+    
+    baseProvider := plugin.NewBaseProvider(info, logger)
+    provider := &MyProvider{
+        BaseProvider: baseProvider,
+    }
+    
+    // Register tools with the provider
+    // ...
+    
+    return provider, nil
+}
+```
 
 ## Package Structure
 
-The library is organized following clean architecture principles:
+The Cortex codebase is organized into several packages:
 
-```
-cortex/
-├── pkg/                    # Public API (exposed to users)
-│   ├── plugin/             # Plugin system for external tools
-│   ├── server/             # Public server implementation
-│   ├── tools/              # Utilities for creating MCP tools
-│   └── types/              # Shared types and interfaces
-├── internal/               # Private implementation details
-├── examples/               # Example code snippets and use cases
-│   ├── stdio-server/       # Stdio server example
-│   ├── sse-server/         # SSE server example
-│   ├── multi-protocol/     # Multi-protocol server example
-│   └── providers/          # Example tool providers
-```
-
-The `pkg/` directory contains all publicly exposed APIs that users of the library should interact with.
+- `pkg/server`: Core server implementation
+- `pkg/tools`: Tool creation and management
+- `pkg/plugin`: Plugin system for extending server capabilities
+- `pkg/types`: Common types and interfaces
+- `pkg/builder`: Builders for creating complex objects
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Support & Contact
 
