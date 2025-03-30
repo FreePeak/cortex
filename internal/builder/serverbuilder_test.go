@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/FreePeak/cortex/internal/domain"
-	"github.com/FreePeak/cortex/internal/infrastructure/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+
+	"github.com/FreePeak/cortex/internal/domain"
+	"github.com/FreePeak/cortex/internal/infrastructure/logging"
 )
 
 // MockResourceRepository is a mock for the ResourceRepository interface

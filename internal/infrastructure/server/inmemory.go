@@ -20,7 +20,11 @@ func NewInMemoryResourceRepository() *InMemoryResourceRepository {
 // GetResource retrieves a resource by its URI.
 func (r *InMemoryResourceRepository) GetResource(ctx context.Context, uri string) (*domain.Resource, error) {
 	if resource, ok := r.resources.Load(uri); ok {
-		return resource.(*domain.Resource), nil
+		res, ok := resource.(*domain.Resource)
+		if !ok {
+			return nil, domain.ErrInternal
+		}
+		return res, nil
 	}
 	return nil, domain.NewResourceNotFoundError(uri)
 }
@@ -29,7 +33,12 @@ func (r *InMemoryResourceRepository) GetResource(ctx context.Context, uri string
 func (r *InMemoryResourceRepository) ListResources(ctx context.Context) ([]*domain.Resource, error) {
 	var resources []*domain.Resource
 	r.resources.Range(func(_, value interface{}) bool {
-		resources = append(resources, value.(*domain.Resource))
+		res, ok := value.(*domain.Resource)
+		if !ok {
+			// Skip invalid entries
+			return true
+		}
+		resources = append(resources, res)
 		return true
 	})
 	return resources, nil
@@ -64,7 +73,11 @@ func NewInMemoryToolRepository() *InMemoryToolRepository {
 func (r *InMemoryToolRepository) GetTool(ctx context.Context, name string) (*domain.Tool, error) {
 	// Try to get the tool with the exact name
 	if tool, ok := r.tools.Load(name); ok {
-		return tool.(*domain.Tool), nil
+		t, ok := tool.(*domain.Tool)
+		if !ok {
+			return nil, domain.ErrInternal
+		}
+		return t, nil
 	}
 
 	return nil, domain.NewToolNotFoundError(name)
@@ -74,7 +87,12 @@ func (r *InMemoryToolRepository) GetTool(ctx context.Context, name string) (*dom
 func (r *InMemoryToolRepository) ListTools(ctx context.Context) ([]*domain.Tool, error) {
 	var tools []*domain.Tool
 	r.tools.Range(func(_, value interface{}) bool {
-		tools = append(tools, value.(*domain.Tool))
+		t, ok := value.(*domain.Tool)
+		if !ok {
+			// Skip invalid entries
+			return true
+		}
+		tools = append(tools, t)
 		return true
 	})
 	return tools, nil
@@ -110,7 +128,11 @@ func NewInMemoryPromptRepository() *InMemoryPromptRepository {
 // GetPrompt retrieves a prompt by its name.
 func (r *InMemoryPromptRepository) GetPrompt(ctx context.Context, name string) (*domain.Prompt, error) {
 	if prompt, ok := r.prompts.Load(name); ok {
-		return prompt.(*domain.Prompt), nil
+		p, ok := prompt.(*domain.Prompt)
+		if !ok {
+			return nil, domain.ErrInternal
+		}
+		return p, nil
 	}
 	return nil, domain.NewPromptNotFoundError(name)
 }
@@ -119,7 +141,12 @@ func (r *InMemoryPromptRepository) GetPrompt(ctx context.Context, name string) (
 func (r *InMemoryPromptRepository) ListPrompts(ctx context.Context) ([]*domain.Prompt, error) {
 	var prompts []*domain.Prompt
 	r.prompts.Range(func(_, value interface{}) bool {
-		prompts = append(prompts, value.(*domain.Prompt))
+		p, ok := value.(*domain.Prompt)
+		if !ok {
+			// Skip invalid entries
+			return true
+		}
+		prompts = append(prompts, p)
 		return true
 	})
 	return prompts, nil
@@ -153,7 +180,11 @@ func NewInMemorySessionRepository() *InMemorySessionRepository {
 // GetSession retrieves a session by its ID.
 func (r *InMemorySessionRepository) GetSession(ctx context.Context, id string) (*domain.ClientSession, error) {
 	if session, ok := r.sessions.Load(id); ok {
-		return session.(*domain.ClientSession), nil
+		s, ok := session.(*domain.ClientSession)
+		if !ok {
+			return nil, domain.ErrInternal
+		}
+		return s, nil
 	}
 	return nil, domain.NewSessionNotFoundError(id)
 }
@@ -162,7 +193,12 @@ func (r *InMemorySessionRepository) GetSession(ctx context.Context, id string) (
 func (r *InMemorySessionRepository) ListSessions(ctx context.Context) ([]*domain.ClientSession, error) {
 	var sessions []*domain.ClientSession
 	r.sessions.Range(func(_, value interface{}) bool {
-		sessions = append(sessions, value.(*domain.ClientSession))
+		s, ok := value.(*domain.ClientSession)
+		if !ok {
+			// Skip invalid entries
+			return true
+		}
+		sessions = append(sessions, s)
 		return true
 	})
 	return sessions, nil
