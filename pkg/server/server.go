@@ -63,20 +63,18 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 		return fmt.Errorf("handler cannot be nil")
 	}
 
-	// Log the original tool name
-	s.logger.Printf("Adding tool with original name: %s", tool.Name)
-
 	// Store the original tool name to use for registration
 	originalName := tool.Name
 
-	// Store the tool and its handler using the original name
+	// Log the tool names
+	s.logger.Printf("Adding tool with name: %s ", originalName)
+
 	s.tools[originalName] = tool
 	s.handlers[originalName] = handler
 
-	// Add tool to the internal builder
+	// Add tool to the internal builder with original name
 	s.builder.AddTool(ctx, convertToInternalTool(tool))
 
-	// Register the tool handler with the ServerService to make it available to the HTTP/SSE server
 	// Create an adapter to convert from our API to the internal API
 	serviceAdapter := func(ctx context.Context, params map[string]interface{}, session *domain.ClientSession) (interface{}, error) {
 		// Log that the handler is being called
@@ -101,9 +99,11 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 
 	// Get the service from the builder
 	service := s.builder.BuildService()
-	service.RegisterToolHandler(originalName, serviceAdapter)
 
+	// Register with original name
+	service.RegisterToolHandler(originalName, serviceAdapter)
 	s.logger.Printf("Registered tool: %s", originalName)
+
 	return nil
 }
 
@@ -123,6 +123,9 @@ func (s *MCPServer) RegisterProvider(ctx context.Context, provider plugin.Provid
 
 	// Register each tool with the builder
 	for _, tool := range tools {
+		// Get original name
+		originalName := tool.Name
+
 		// Convert to internal tool
 		internalTool := &domain.Tool{
 			Name:        tool.Name,
@@ -153,21 +156,21 @@ func (s *MCPServer) RegisterProvider(ctx context.Context, provider plugin.Provid
 
 			// Create request and execute the tool through the provider
 			request := &plugin.ExecuteRequest{
-				ToolName:   tool.Name,
+				ToolName:   originalName,
 				Parameters: params,
 				Session:    pubSession,
 			}
 
 			// Find the provider for this tool
-			_, provider, err := s.registry.GetTool(ctx, tool.Name)
+			_, provider, err := s.registry.GetTool(ctx, originalName)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get tool %s: %w", tool.Name, err)
+				return nil, fmt.Errorf("failed to get tool %s: %w", originalName, err)
 			}
 
 			// Execute the tool through the provider
 			response, err := provider.ExecuteTool(ctx, request)
 			if err != nil {
-				return nil, fmt.Errorf("failed to execute tool %s: %w", tool.Name, err)
+				return nil, fmt.Errorf("failed to execute tool %s: %w", originalName, err)
 			}
 
 			if response.Error != nil {
@@ -179,8 +182,10 @@ func (s *MCPServer) RegisterProvider(ctx context.Context, provider plugin.Provid
 
 		// Get the service from the builder
 		service := s.builder.BuildService()
-		service.RegisterToolHandler(tool.Name, serviceAdapter)
-		s.logger.Printf("Registered tool: %s", tool.Name)
+
+		// Register with original name
+		service.RegisterToolHandler(originalName, serviceAdapter)
+		s.logger.Printf("Registered tool: %s", originalName)
 	}
 
 	return nil

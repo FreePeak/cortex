@@ -22,7 +22,10 @@ func main() {
 	logger := log.New(os.Stdout, "[cortex-stdio] ", log.LstdFlags)
 
 	// Create the server with name and version
-	mcpServer := server.NewMCPServer("Echo Stdio Server", "1.0.0", logger)
+	mcpServer := server.NewMCPServer("Cortex Stdio Server", "1.0.0", logger)
+
+	// Initialize random seed
+	rand.Seed(time.Now().UnixNano())
 
 	// Create the echo tool using the fluent API
 	echoTool := tools.NewTool("echo",
@@ -56,10 +59,11 @@ func main() {
 
 	// Print server ready message
 	fmt.Println("Server ready. You can now send JSON-RPC requests via stdin.")
-	fmt.Println("Call the echo tool using:")
+	fmt.Println("The following tools are available:")
+	fmt.Println("- echo / cortex_echo")
+	fmt.Println("- weather / cortex_weather")
+	fmt.Println("Example call:")
 	fmt.Println(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}`)
-	fmt.Println("Call the weather tool using:")
-	fmt.Println(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"weather","parameters":{"location":"New York"}}}`)
 
 	// Start the server
 	if err := mcpServer.ServeStdio(); err != nil {
@@ -70,6 +74,9 @@ func main() {
 
 // Echo tool handler
 func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
+	// Log request details
+	log.Printf("Handling echo request with name: %s", request.Name)
+
 	// Extract the message parameter
 	message, ok := request.Parameters["message"].(string)
 	if !ok {
@@ -93,6 +100,9 @@ func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{
 
 // Weather tool handler
 func handleWeather(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
+	// Log request details
+	log.Printf("Handling weather request with name: %s", request.Name)
+
 	// Extract the location parameter
 	location, ok := request.Parameters["location"].(string)
 	if !ok {

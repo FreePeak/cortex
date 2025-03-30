@@ -57,35 +57,18 @@ func NewServerService(config ServerConfig) *ServerService {
 
 // RegisterToolHandler registers a handler for a specific tool
 func (s *ServerService) RegisterToolHandler(name string, handler ToolHandlerFunc) {
-	// Register with original name
-	s.toolHandlers[name] = handler
+	// // Register with original name
+	// s.toolHandlers[name] = handler
 
-	// Register with prefixed name if it doesn't already start with the prefix
-	prefixedName := "cortex_" + name
 	// Only register if there's not already a handler with this name
-	if _, exists := s.toolHandlers[prefixedName]; !exists {
-		s.toolHandlers[prefixedName] = handler
+	if _, exists := s.toolHandlers[name]; !exists {
+		s.toolHandlers[name] = handler
 	}
 }
 
 // GetToolHandler retrieves a handler for a specific tool
 func (s *ServerService) GetToolHandler(name string) ToolHandlerFunc {
-	// Try to get the handler with the exact name
-	if handler, exists := s.toolHandlers[name]; exists {
-		return handler
-	}
-
-	// If the name starts with "cortex_", try without the prefix
-	if len(name) > 7 && name[:7] == "cortex_" {
-		unprefixedName := name[7:]
-		if handler, exists := s.toolHandlers[unprefixedName]; exists {
-			return handler
-		}
-	}
-
-	// If the name doesn't have the prefix, try with the prefix
-	prefixedName := "cortex_" + name
-	return s.toolHandlers[prefixedName]
+	return s.toolHandlers[name]
 }
 
 // GetAllToolHandlerNames returns a slice of all registered tool handler names
@@ -139,14 +122,6 @@ func (s *ServerService) GetTool(ctx context.Context, name string) (*domain.Tool,
 		return tool, nil
 	}
 
-	// If the name doesn't have the prefix, try with the prefix
-	prefixedName := "cortex_" + name
-	tool, err = s.toolRepo.GetTool(ctx, prefixedName)
-	if err == nil {
-		return tool, nil
-	}
-
-	// If all attempts fail, return the original error
 	return nil, err
 }
 
