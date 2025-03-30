@@ -18,8 +18,9 @@ func getTimestamp() string {
 }
 
 func main() {
-	// Create a logger
-	logger := log.New(os.Stdout, "[cortex-stdio] ", log.LstdFlags)
+	// Create a logger that writes to stderr instead of stdout
+	// This is critical for STDIO servers as stdout must only contain JSON-RPC messages
+	logger := log.New(os.Stderr, "[cortex-stdio] ", log.LstdFlags)
 
 	// Create the server with name and version
 	mcpServer := server.NewMCPServer("Cortex Stdio Server", "1.0.0", logger)
@@ -57,15 +58,12 @@ func main() {
 		logger.Fatalf("Error adding weather tool: %v", err)
 	}
 
-	// Print server ready message
-	fmt.Println("Server ready. You can now send JSON-RPC requests via stdin.")
-	fmt.Println("The following tools are available:")
-	fmt.Println("- echo / cortex_echo")
-	fmt.Println("- weather / cortex_weather")
-	fmt.Println("Example call:")
-	fmt.Println(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","parameters":{"message":"Hello, World!"}}}`)
+	// Write server status to stderr instead of stdout to maintain clean JSON protocol
+	fmt.Fprintf(os.Stderr, "Server ready. The following tools are available:\n")
+	fmt.Fprintf(os.Stderr, "- echo\n")
+	fmt.Fprintf(os.Stderr, "- weather\n")
 
-	// Start the server
+	// Start the STDIO server
 	if err := mcpServer.ServeStdio(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error serving stdio: %v\n", err)
 		os.Exit(1)
@@ -74,8 +72,8 @@ func main() {
 
 // Echo tool handler
 func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
-	// Log request details
-	log.Printf("Handling echo request with name: %s", request.Name)
+	// Log request details to stderr via the logger
+	log.Printf("Handling echo tool call with name: %s", request.Name)
 
 	// Extract the message parameter
 	message, ok := request.Parameters["message"].(string)
@@ -100,8 +98,8 @@ func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{
 
 // Weather tool handler
 func handleWeather(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
-	// Log request details
-	log.Printf("Handling weather request with name: %s", request.Name)
+	// Log request details to stderr via the logger
+	log.Printf("Handling weather tool call with name: %s", request.Name)
 
 	// Extract the location parameter
 	location, ok := request.Parameters["location"].(string)

@@ -1,5 +1,6 @@
 {
-  "mcp.executablePath": "/Users/harvey/Work/dev/FreePeak/Opensource/cortex/bin/echo-stdio-server",
+  "mcp.executablePath": "/Users/harvey/Work/dev/FreePeak/Opensource/cortex/bin/stdio-server",
   "mcp.transport": "stdio",
-  "mcp.logging": true
+  "mcp.logging": true,
+  "mcp.logLevel": "debug"
 }
