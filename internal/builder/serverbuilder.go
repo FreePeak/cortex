@@ -1,3 +1,4 @@
+// Package builder provides a builder for the MCP server.
 package builder
 
 import (
@@ -11,30 +12,40 @@ import (
 	"github.com/FreePeak/cortex/internal/usecases"
 )
 
-// ServerBuilder implements the Builder pattern for creating MCP servers
+// ServerBuilder is a builder for creating an MCP server.
 type ServerBuilder struct {
 	name               string
 	version            string
-	instructions       string
 	address            string
+	instructions       string
 	resourceRepo       domain.ResourceRepository
 	toolRepo           domain.ToolRepository
 	promptRepo         domain.PromptRepository
 	sessionRepo        domain.SessionRepository
 	notificationSender domain.NotificationSender
+
+	// Maintain a single instance of the server service
+	serverService *usecases.ServerService
 }
 
-// NewServerBuilder creates a new server builder with default values
+// NewServerBuilder creates a new ServerBuilder.
 func NewServerBuilder() *ServerBuilder {
+	// Create default repositories
+	toolRepo := server.NewInMemoryToolRepository()
+	resourceRepo := server.NewInMemoryResourceRepository()
+	promptRepo := server.NewInMemoryPromptRepository()
+	sessionRepo := server.NewInMemorySessionRepository()
+
 	return &ServerBuilder{
-		name:         "MCP Server",
-		version:      "1.0.0",
-		instructions: "MCP Server for AI tools and resources",
-		address:      ":8080",
-		resourceRepo: server.NewInMemoryResourceRepository(),
-		toolRepo:     server.NewInMemoryToolRepository(),
-		promptRepo:   server.NewInMemoryPromptRepository(),
-		sessionRepo:  server.NewInMemorySessionRepository(),
+		name:          "MCP Server",
+		version:       "1.0.0",
+		address:       ":8080",
+		instructions:  "MCP Server for AI tools and resources",
+		resourceRepo:  resourceRepo,
+		toolRepo:      toolRepo,
+		promptRepo:    promptRepo,
+		sessionRepo:   sessionRepo,
+		serverService: nil, // Will be initialized when first needed
 	}
 }
 
@@ -118,6 +129,11 @@ func (b *ServerBuilder) AddPrompt(ctx context.Context, prompt *domain.Prompt) *S
 
 // BuildService builds and returns the server service
 func (b *ServerBuilder) BuildService() *usecases.ServerService {
+	// If we already have a server service, return it
+	if b.serverService != nil {
+		return b.serverService
+	}
+
 	// Create notification sender if not provided
 	if b.notificationSender == nil {
 		b.notificationSender = server.NewNotificationSender("2.0")
@@ -135,7 +151,9 @@ func (b *ServerBuilder) BuildService() *usecases.ServerService {
 		NotificationSender: b.notificationSender,
 	}
 
-	return usecases.NewServerService(config)
+	// Create and store the server service
+	b.serverService = usecases.NewServerService(config)
+	return b.serverService
 }
 
 // BuildMCPServer builds and returns an MCP server

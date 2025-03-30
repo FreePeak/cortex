@@ -87,7 +87,7 @@ func (s *MCPServer) AddTool(ctx context.Context, tool *types.Tool, handler ToolH
 		return handler(ctx, request)
 	}
 
-	// Get the ServerService from the builder and register the handler
+	// Get the service from the builder
 	service := s.builder.BuildService()
 	service.RegisterToolHandler(originalName, serviceAdapter)
 
@@ -103,7 +103,7 @@ func (s *MCPServer) RegisterToolHandler(name string, handler ToolHandler) error 
 
 	s.handlers[name] = handler
 
-	// Register the tool handler with the ServerService
+	// Get the service from the builder
 	service := s.builder.BuildService()
 
 	// Create an adapter to convert from our API to the internal API
