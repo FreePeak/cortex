@@ -3,6 +3,10 @@ package logging
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -40,33 +44,92 @@ type Config struct {
 
 // DefaultConfig returns a default configuration for the logger
 func DefaultConfig() Config {
+	// If in stdio mode, default to stderr instead of stdout
+	outputs := []string{"stdout"}
+	if isStdioMode() {
+		outputs = getStdioSafeOutputs()
+	}
+
 	return Config{
 		Level:       InfoLevel,
 		Development: false,
-		OutputPaths: []string{"stdout"},
+		OutputPaths: outputs,
 	}
 }
 
 // DevelopmentConfig returns a development configuration for the logger
 func DevelopmentConfig() Config {
+	// If in stdio mode, default to stderr instead of stdout
+	outputs := []string{"stdout"}
+	if isStdioMode() {
+		outputs = getStdioSafeOutputs()
+	}
+
 	return Config{
 		Level:       DebugLevel,
 		Development: true,
-		OutputPaths: []string{"stdout"},
+		OutputPaths: outputs,
 	}
 }
 
 // ProductionConfig returns a production configuration for the logger
 func ProductionConfig() Config {
+	// If in stdio mode, default to stderr instead of stdout
+	outputs := []string{"stdout"}
+	if isStdioMode() {
+		outputs = getStdioSafeOutputs()
+	}
+
 	return Config{
 		Level:       InfoLevel,
 		Development: false,
-		OutputPaths: []string{"stdout"},
+		OutputPaths: outputs,
 	}
+}
+
+// isStdioMode checks if we're running in stdio mode
+func isStdioMode() bool {
+	mode := os.Getenv("TRANSPORT_MODE")
+	return mode == "stdio"
+}
+
+// getStdioSafeOutputs returns outputs that are safe for stdio mode
+func getStdioSafeOutputs() []string {
+	// In stdio mode, never use stdout as it will interfere with JSON-RPC
+	// Try to use a log file, fall back to stderr
+	if os.Getenv("MCP_DISABLE_LOGGING") == "true" {
+		// If logging is disabled, use /dev/null or nul for Windows
+		return []string{"stderr"}
+	}
+
+	// Create a log file in the logs directory
+	logsDir := "logs"
+	if _, err := os.Stat(logsDir); os.IsNotExist(err) {
+		os.MkdirAll(logsDir, 0755)
+	}
+
+	// Create a timestamped log file
+	timestamp := time.Now().Format("20060102-150405")
+	logFile := filepath.Join(logsDir, fmt.Sprintf("cortex-%s.log", timestamp))
+
+	return []string{logFile, "stderr"}
 }
 
 // New creates a new logger with the given configuration
 func New(config Config) (*Logger, error) {
+	// If in stdio mode, force logs to NOT go to stdout regardless of config
+	if isStdioMode() && len(config.OutputPaths) > 0 {
+		// Replace any stdout with safe outputs
+		safeOutputs := getStdioSafeOutputs()
+		for _, path := range config.OutputPaths {
+			if path == "stdout" {
+				// In stdio mode, replace stdout with safe outputs
+				config.OutputPaths = safeOutputs
+				break
+			}
+		}
+	}
+
 	// Convert log level to zapcore level
 	var level zapcore.Level
 	switch config.Level {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/FreePeak/cortex/internal/builder"
 	"github.com/FreePeak/cortex/internal/domain"
@@ -222,8 +223,15 @@ func (s *MCPServer) UnregisterProvider(ctx context.Context, providerID string) e
 
 // ServeStdio serves the MCP server over standard I/O.
 func (s *MCPServer) ServeStdio() error {
+	// Check if logging is disabled
+	disableLogging := os.Getenv("MCP_DISABLE_LOGGING") == "true" ||
+		os.Getenv("DISABLE_LOGGING") == "true"
+
 	// In STDIO mode, we must write all logs to stderr, as stdout is reserved for JSON-RPC messages
-	s.logger.Printf("Starting MCP server over stdio: %s v%s", s.name, s.version)
+	if !disableLogging {
+		// Only log to stderr if logging is enabled
+		s.logger.Printf("Starting MCP server over stdio: %s v%s", s.name, s.version)
+	}
 
 	// Create stdio options
 	var stdioOpts []stdio.StdioOption
@@ -232,9 +240,11 @@ func (s *MCPServer) ServeStdio() error {
 	stdioOpts = append(stdioOpts, stdio.WithErrorLogger(s.logger))
 
 	// Log registered tools for debugging
-	service := s.builder.BuildService()
-	toolHandlers := service.GetAllToolHandlerNames()
-	s.logger.Printf("Available tools in the server: %v", toolHandlers)
+	if !disableLogging {
+		service := s.builder.BuildService()
+		toolHandlers := service.GetAllToolHandlerNames()
+		s.logger.Printf("Available tools in the server: %v", toolHandlers)
+	}
 
 	// Start the stdio server with our custom handler
 	return s.builder.ServeStdio(stdioOpts...)
