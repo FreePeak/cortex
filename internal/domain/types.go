@@ -50,6 +50,7 @@ type ToolParameter struct {
 	Description string
 	Type        string
 	Required    bool
+	Items       map[string]interface{}
 }
 
 // ToolCall represents a request to execute a tool.

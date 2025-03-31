@@ -223,6 +223,7 @@ func (a *toolRepositoryAdapter) GetTool(ctx context.Context, name string) (*inte
 			Description: param.Description,
 			Type:        param.Type,
 			Required:    param.Required,
+			Items:       param.Items,
 		}
 	}
 
@@ -249,6 +250,7 @@ func (a *toolRepositoryAdapter) ListTools(ctx context.Context) ([]*internalDomai
 				Description: param.Description,
 				Type:        param.Type,
 				Required:    param.Required,
+				Items:       param.Items,
 			}
 		}
 	}
@@ -269,6 +271,7 @@ func (a *toolRepositoryAdapter) AddTool(ctx context.Context, tool *internalDomai
 			Description: param.Description,
 			Type:        param.Type,
 			Required:    param.Required,
+			Items:       param.Items,
 		}
 	}
 

@@ -440,6 +440,12 @@ func (p *MessageProcessor) handleToolsList(ctx context.Context, params interface
 				"type":        param.Type,
 				"description": param.Description,
 			}
+
+			// Add items schema for array parameters
+			if param.Type == "array" && param.Items != nil {
+				paramObj["items"] = param.Items
+			}
+
 			properties[param.Name] = paramObj
 
 			if param.Required {
