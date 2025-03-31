@@ -88,15 +88,36 @@ func WithErrorLogger(stdLogger *log.Logger) StdioOption {
 // NewStdioServer creates a new stdio server wrapper around an MCPServer.
 // It initializes the server with a default logger that logs to stderr.
 func NewStdioServer(server *rest.MCPServer, opts ...StdioOption) *StdioServer {
-	// Create default logger - always use stderr for STDIO servers
-	defaultLogger, err := logging.New(logging.Config{
-		Level:       logging.InfoLevel,
-		Development: true,
-		OutputPaths: []string{"stderr"}, // Force stderr for all logging output
-		InitialFields: logging.Fields{
-			"component": "stdio-server",
-		},
-	})
+	// Check for environment variables that indicate logging should be disabled
+	var defaultLogger *logging.Logger
+	var err error
+
+	disableLogging := os.Getenv("MCP_DISABLE_LOGGING") == "true" ||
+		os.Getenv("DISABLE_LOGGING") == "true"
+
+	if disableLogging {
+		// Create a logger that sends nothing to stdout
+		// We'll still log to stderr for critical errors
+		defaultLogger, err = logging.New(logging.Config{
+			Level:       logging.ErrorLevel, // Only log errors
+			Development: false,
+			OutputPaths: []string{"stderr"}, // Only stderr, never stdout
+			InitialFields: logging.Fields{
+				"component": "stdio-server",
+			},
+		})
+	} else {
+		// Create default logger - always use stderr for STDIO servers
+		defaultLogger, err = logging.New(logging.Config{
+			Level:       logging.InfoLevel,
+			Development: true,
+			OutputPaths: []string{"stderr"}, // Force stderr for all logging output
+			InitialFields: logging.Fields{
+				"component": "stdio-server",
+			},
+		})
+	}
+
 	if err != nil {
 		// Fallback to a simple default logger if we can't create the structured one
 		defaultLogger = logging.Default()
@@ -222,19 +243,30 @@ func ServeStdio(server *rest.MCPServer, opts ...StdioOption) error {
 
 	go func() {
 		sig := <-sigChan
-		s.logger.Info("Received shutdown signal, stopping server...", logging.Fields{"signal": sig.String()})
+		// Only log if logging is enabled
+		if os.Getenv("MCP_DISABLE_LOGGING") != "true" && os.Getenv("DISABLE_LOGGING") != "true" {
+			s.logger.Info("Received shutdown signal, stopping server...", logging.Fields{"signal": sig.String()})
+		}
 		cancel()
 	}()
 
-	s.logger.Info("Starting MCP server in stdio mode")
+	// Only log if logging is enabled
+	if os.Getenv("MCP_DISABLE_LOGGING") != "true" && os.Getenv("DISABLE_LOGGING") != "true" {
+		s.logger.Info("Starting MCP server in stdio mode")
+	}
 
 	err := s.Listen(ctx, os.Stdin, os.Stdout)
 	if err != nil && err != context.Canceled {
+		// Always log errors, but to stderr
 		s.logger.Error("Server exited with error", logging.Fields{"error": err})
 		return err
 	}
 
-	s.logger.Info("Server shutdown complete")
+	// Only log if logging is enabled
+	if os.Getenv("MCP_DISABLE_LOGGING") != "true" && os.Getenv("DISABLE_LOGGING") != "true" {
+		s.logger.Info("Server shutdown complete")
+	}
+
 	return nil
 }
 
@@ -307,7 +339,11 @@ func (p *MessageProcessor) Process(ctx context.Context, message string) (interfa
 	// Check if this is a notification (no ID field)
 	// Notifications don't require responses
 	if baseMessage.ID == nil && strings.HasPrefix(baseMessage.Method, "notifications/") {
-		p.logger.Info("Received notification", logging.Fields{"method": baseMessage.Method})
+		// In stdio mode we must be very careful about logging
+		// Use a custom field to avoid JSON output format
+		if os.Getenv("MCP_DISABLE_LOGGING") != "true" && os.Getenv("DISABLE_LOGGING") != "true" {
+			p.logger.Info("Received notification", logging.Fields{"method": baseMessage.Method})
+		}
 		// Process notification but don't return a response
 		return nil, nil
 	}
@@ -317,7 +353,11 @@ func (p *MessageProcessor) Process(ctx context.Context, message string) (interfa
 
 	// Handle notifications with a prefix
 	if !exists && strings.HasPrefix(baseMessage.Method, "notifications/") {
-		p.logger.Info("Processed notification", logging.Fields{"method": baseMessage.Method})
+		// In stdio mode we must be very careful about logging
+		// Use a custom field to avoid JSON output format
+		if os.Getenv("MCP_DISABLE_LOGGING") != "true" && os.Getenv("DISABLE_LOGGING") != "true" {
+			p.logger.Info("Processed notification", logging.Fields{"method": baseMessage.Method})
+		}
 		return nil, nil
 	}
 
