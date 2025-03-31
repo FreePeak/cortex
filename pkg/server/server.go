@@ -140,6 +140,7 @@ func (s *MCPServer) RegisterProvider(ctx context.Context, provider plugin.Provid
 				Description: param.Description,
 				Type:        param.Type,
 				Required:    param.Required,
+				Items:       param.Items,
 			}
 		}
 
@@ -292,6 +293,7 @@ func convertToInternalTool(tool *types.Tool) *domain.Tool {
 			Description: param.Description,
 			Type:        param.Type,
 			Required:    param.Required,
+			Items:       param.Items,
 		}
 	}
 
