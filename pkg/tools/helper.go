@@ -49,6 +49,13 @@ func Required() ParameterOption {
 	}
 }
 
+// Items sets the schema for items in an array parameter.
+func Items(schema map[string]interface{}) ParameterOption {
+	return func(p *types.ToolParameter) {
+		p.Items = schema
+	}
+}
+
 // Type functions for creating parameters
 
 // WithString adds a string parameter to a tool.
