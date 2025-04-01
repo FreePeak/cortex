@@ -89,11 +89,28 @@ func main() {
 		),
 	)
 
-	// Add the tool to the server with a handler
+	// Example of a tool with array parameter
+	arrayExampleTool := tools.NewTool("array_example",
+		tools.WithDescription("Example tool with array parameter"),
+		tools.WithArray("values",
+			tools.Description("Array of string values"),
+			tools.Required(),
+			tools.Items(map[string]interface{}{
+				"type": "string",
+			}),
+		),
+	)
+
+	// Add the tools to the server with handlers
 	ctx := context.Background()
 	err := mcpServer.AddTool(ctx, echoTool, handleEcho)
 	if err != nil {
 		logger.Fatalf("Error adding tool: %v", err)
+	}
+
+	err = mcpServer.AddTool(ctx, arrayExampleTool, handleArrayExample)
+	if err != nil {
+		logger.Fatalf("Error adding array example tool: %v", err)
 	}
 
 	// Write server status to stderr instead of stdout to maintain clean JSON protocol
@@ -124,6 +141,26 @@ func handleEcho(ctx context.Context, request server.ToolCallRequest) (interface{
 				"text": message,
 			},
 		},
+	}, nil
+}
+
+// Array example tool handler
+func handleArrayExample(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
+	// Extract the values parameter
+	values, ok := request.Parameters["values"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid 'values' parameter")
+	}
+
+	// Convert values to string array
+	stringValues := make([]string, len(values))
+	for i, v := range values {
+		stringValues[i] = v.(string)
+	}
+
+	// Return the array response in the format expected by the MCP protocol
+	return map[string]interface{}{
+		"content": stringValues,
 	}, nil
 }
 ```

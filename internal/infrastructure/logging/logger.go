@@ -40,6 +40,8 @@ type Config struct {
 	Development   bool
 	OutputPaths   []string
 	InitialFields Fields
+	LogToFile     bool
+	LogDir        string
 }
 
 // DefaultConfig returns a default configuration for the logger
@@ -105,7 +107,10 @@ func getStdioSafeOutputs() []string {
 	// Create a log file in the logs directory
 	logsDir := "logs"
 	if _, err := os.Stat(logsDir); os.IsNotExist(err) {
-		os.MkdirAll(logsDir, 0755)
+		if err := os.MkdirAll(logsDir, 0755); err != nil {
+			// If we can't create the directory, just use stderr
+			return []string{"stderr"}
+		}
 	}
 
 	// Create a timestamped log file
