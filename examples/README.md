@@ -10,6 +10,12 @@ These examples showcase different server configurations and communication protoc
 - **sse-server**: An HTTP/SSE-based MCP server example
 - **multi-protocol**: A server that supports both stdio and HTTP protocols
 
+## Integration Examples
+
+The `integration` directory contains examples of embedding Cortex in other applications:
+
+- **pocketbase**: Demonstrates how to integrate Cortex with PocketBase
+
 ## Tool Provider Examples
 
 The `providers` directory contains example tool providers that can be used with the Cortex platform:
@@ -45,4 +51,12 @@ go run examples/multi-protocol/main.go -protocol stdio
 go run examples/multi-protocol/main.go -protocol http -address localhost:8080
 ```
 
-This example shows how to create a server that can switch between stdio and HTTP protocols. 
+This example shows how to create a server that can switch between stdio and HTTP protocols.
+
+### PocketBase Integration
+
+```bash
+go run examples/integration/pocketbase/main.go
+```
+
+This example demonstrates how to embed Cortex in a PocketBase application, using a mock PocketBase server for simplicity. 

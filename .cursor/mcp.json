@@ -1,10 +1,7 @@
 {
     "mcpServers": {
-        "golang-mcp-server-sse": {
-            "url": "http://localhost:8080/sse"
-        },
-        "golang-mcp-server-stdio-cortex": {
-            "command": "./bin/stdio-server"
+        "pocketbase": {
+            "url": "http://localhost:8090/api/mcp/sse"
         }
     }
 }
