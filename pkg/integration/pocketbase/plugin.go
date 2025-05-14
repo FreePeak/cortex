@@ -106,6 +106,36 @@ func NewCortexPlugin(opts ...Option) *CortexPlugin {
 
 // AddTool adds a tool to the Cortex server.
 func (p *CortexPlugin) AddTool(tool *types.Tool, handler func(ctx context.Context, request ToolCallRequest) (interface{}, error)) error {
+	// Add inputSchema to tool based on parameters
+	properties := make(map[string]interface{})
+	required := make([]string, 0)
+
+	for _, param := range tool.Parameters {
+		// Add to properties
+		paramSchema := map[string]interface{}{
+			"type":        param.Type,
+			"description": param.Description,
+		}
+
+		if param.Items != nil {
+			paramSchema["items"] = param.Items
+		}
+
+		properties[param.Name] = paramSchema
+
+		// Add to required if needed
+		if param.Required {
+			required = append(required, param.Name)
+		}
+	}
+
+	// Set the inputSchema
+	tool.InputSchema = map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
+	}
+
 	// Create an adapter to convert our tool handler to the MCP server's tool handler
 	handlerAdapter := func(ctx context.Context, req server.ToolCallRequest) (interface{}, error) {
 		// Convert the request
@@ -616,8 +646,20 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				tools := make([]map[string]interface{}, 0)
 
+				// Log all tools to see their content
+				p.logger.Printf("==== DEBUG: All registered tools ====")
+				allTools := p.mcpServer.GetTools()
+				for name, tool := range allTools {
+					toolBytes, _ := json.Marshal(tool)
+					p.logger.Printf("Tool %s: %s", name, string(toolBytes))
+				}
+
 				// Convert registered tools to the expected format
 				for name, tool := range p.mcpServer.GetTools() {
+					// Log the tool details to debug
+					toolBytes, _ := json.Marshal(tool)
+					p.logger.Printf("Processing tool: %s, Details: %s", name, string(toolBytes))
+
 					toolInfo := map[string]interface{}{
 						"name":        name,
 						"description": tool.Description,
@@ -639,18 +681,63 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 					}
 
 					toolInfo["parameters"] = params
+
+					// Use the tool's inputSchema if available, otherwise create one
+					if tool.InputSchema != nil {
+						toolInfo["inputSchema"] = tool.InputSchema
+						p.logger.Printf("Using existing inputSchema for tool %s", name)
+					} else {
+						// Add inputSchema manually
+						p.logger.Printf("Generating inputSchema for tool %s", name)
+						properties := make(map[string]interface{})
+						required := []string{}
+
+						for _, param := range tool.Parameters {
+							paramSchema := map[string]interface{}{
+								"type":        param.Type,
+								"description": param.Description,
+							}
+
+							if param.Items != nil {
+								paramSchema["items"] = param.Items
+							}
+
+							properties[param.Name] = paramSchema
+
+							if param.Required {
+								required = append(required, param.Name)
+							}
+						}
+
+						toolInfo["inputSchema"] = map[string]interface{}{
+							"type":       "object",
+							"properties": properties,
+							"required":   required,
+						}
+					}
+
 					tools = append(tools, toolInfo)
+
+					// Log the final tool info for debugging
+					infoBytes, _ := json.Marshal(toolInfo)
+					p.logger.Printf("Final tool info: %s", string(infoBytes))
 				}
 
-				// Return the tools list in JSON-RPC 2.0 format
-				response := map[string]interface{}{
+				// Create the response with a fixed ID for the /tools endpoint
+				responseObj := map[string]interface{}{
 					"jsonrpc": "2.0",
 					"result": map[string]interface{}{
 						"tools": tools,
 					},
 					"id": "tools.list",
 				}
-				json.NewEncoder(w).Encode(response)
+
+				// Log the final response for debugging
+				respBytes, _ := json.Marshal(responseObj)
+				p.logger.Printf("tools/list response: %s", string(respBytes))
+
+				// Return the tools list in JSON-RPC 2.0 format
+				json.NewEncoder(w).Encode(responseObj)
 				return
 			}
 
@@ -833,14 +920,26 @@ func (p *CortexPlugin) handleJSONRPCRequest(w http.ResponseWriter, r *http.Reque
 		// Get tools from the MCP server
 		tools := make([]map[string]interface{}, 0)
 
+		// Log all tools to see their content
+		p.logger.Printf("==== DEBUG: All registered tools ====")
+		allTools := p.mcpServer.GetTools()
+		for name, tool := range allTools {
+			toolBytes, _ := json.Marshal(tool)
+			p.logger.Printf("Tool %s: %s", name, string(toolBytes))
+		}
+
 		// Convert registered tools to the expected format
 		for name, tool := range p.mcpServer.GetTools() {
+			// Log the tool details to debug
+			toolBytes, _ := json.Marshal(tool)
+			p.logger.Printf("Processing tool: %s, Details: %s", name, string(toolBytes))
+
 			toolInfo := map[string]interface{}{
 				"name":        name,
 				"description": tool.Description,
 			}
 
-			// Convert parameters
+			// Add parameters
 			params := make([]map[string]interface{}, 0, len(tool.Parameters))
 			for _, param := range tool.Parameters {
 				paramInfo := map[string]interface{}{
@@ -856,7 +955,46 @@ func (p *CortexPlugin) handleJSONRPCRequest(w http.ResponseWriter, r *http.Reque
 			}
 
 			toolInfo["parameters"] = params
+
+			// Use the tool's inputSchema if available, otherwise create one
+			if tool.InputSchema != nil {
+				toolInfo["inputSchema"] = tool.InputSchema
+				p.logger.Printf("Using existing inputSchema for tool %s", name)
+			} else {
+				// Add inputSchema manually
+				p.logger.Printf("Generating inputSchema for tool %s", name)
+				properties := make(map[string]interface{})
+				required := []string{}
+
+				for _, param := range tool.Parameters {
+					paramSchema := map[string]interface{}{
+						"type":        param.Type,
+						"description": param.Description,
+					}
+
+					if param.Items != nil {
+						paramSchema["items"] = param.Items
+					}
+
+					properties[param.Name] = paramSchema
+
+					if param.Required {
+						required = append(required, param.Name)
+					}
+				}
+
+				toolInfo["inputSchema"] = map[string]interface{}{
+					"type":       "object",
+					"properties": properties,
+					"required":   required,
+				}
+			}
+
 			tools = append(tools, toolInfo)
+
+			// Log the final tool info for debugging
+			infoBytes, _ := json.Marshal(toolInfo)
+			p.logger.Printf("Final tool info: %s", string(infoBytes))
 		}
 
 		// Create the response with the same ID as the request
@@ -867,6 +1005,10 @@ func (p *CortexPlugin) handleJSONRPCRequest(w http.ResponseWriter, r *http.Reque
 			},
 			"id": id,
 		}
+
+		// Log the final response for debugging
+		respBytes, _ := json.Marshal(response)
+		p.logger.Printf("tools/list response: %s", string(respBytes))
 
 	default:
 		// Handle tool execution for methods with tools/ prefix
