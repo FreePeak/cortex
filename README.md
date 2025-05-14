@@ -29,6 +29,9 @@
   - [HTTP with SSE](#http-with-sse)
   - [Multi-Protocol](#multi-protocol)
   - [Testing and Debugging](#testing-and-debugging)
+- [Embedding Cortex](#embedding-cortex)
+  - [HTTP Server Integration](#http-server-integration)
+  - [PocketBase Integration](#pocketbase-integration)
 - [Examples](#examples)
   - [Basic Examples](#basic-examples)
   - [Advanced Examples](#advanced-examples)
@@ -46,6 +49,7 @@ The Model Context Protocol allows applications to provide context for LLMs in a 
 - Use standard transports like stdio and Server-Sent Events (SSE)
 - Handle all MCP protocol messages and lifecycle events
 - Follow Go best practices and clean architecture principles
+- Embed Cortex into existing servers and applications
 
 > **Note:** Cortex is always updated to align with the latest MCP specification from [spec.modelcontextprotocol.io/latest](https://spec.modelcontextprotocol.io/latest)
 
@@ -340,13 +344,138 @@ signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 ### Testing and Debugging
 
-For testing and debugging, the Cortex framework provides several utilities:
+For more detailed information on testing and debugging Cortex servers, see the [Testing Guide](docs/testing.md).
+
+## Embedding Cortex
+
+Cortex can be embedded into existing applications to add MCP capabilities without running a separate server. This is useful for integrating with existing web frameworks or applications like PocketBase.
+
+### HTTP Server Integration
+
+You can easily integrate Cortex with any Go HTTP server:
 
 ```go
-// You can use the test-call.sh script to send test requests to your STDIO server
-// For example:
-// ./test-call.sh echo '{"message":"Hello, World!"}'
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/FreePeak/cortex/pkg/server"
+	"github.com/FreePeak/cortex/pkg/tools"
+)
+
+func main() {
+	// Create a logger
+	logger := log.New(os.Stderr, "[cortex] ", log.LstdFlags)
+
+	// Create an MCP server
+	mcpServer := server.NewMCPServer("Embedded MCP Server", "1.0.0", logger)
+
+	// Add some tools
+	echoTool := tools.NewTool("echo",
+		tools.WithDescription("Echoes back the input message"),
+		tools.WithString("message",
+			tools.Description("The message to echo back"),
+			tools.Required(),
+		),
+	)
+
+	// Add the tool to the server
+	mcpServer.AddTool(context.Background(), echoTool, func(ctx context.Context, request server.ToolCallRequest) (interface{}, error) {
+		message := request.Parameters["message"].(string)
+		return map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": message,
+				},
+			},
+		}, nil
+	})
+
+	// Create an HTTP adapter for the MCP server
+	adapter := server.NewHTTPAdapter(mcpServer, server.WithPath("/api/mcp"))
+
+	// Use the adapter in your HTTP server
+	http.Handle("/api/mcp/", adapter.Handler())
+	
+	// Add your other routes
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello from the main server!"))
+	})
+
+	// Start the server
+	logger.Println("Starting server on :8080")
+	http.ListenAndServe(":8080", nil)
+}
 ```
+
+### PocketBase Integration
+
+Cortex can be integrated with [PocketBase](https://github.com/pocketbase/pocketbase), an open-source backend with database, auth, and admin UI:
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
+	
+	"github.com/FreePeak/cortex/pkg/integration/pocketbase"
+	"github.com/FreePeak/cortex/pkg/tools"
+)
+
+func main() {
+	// Create a new PocketBase app
+	app := pocketbase.New()
+
+	// Initialize Cortex plugin
+	plugin := pocketbase.NewCortexPlugin(
+		pocketbase.WithName("PocketBase MCP Server"),
+		pocketbase.WithVersion("1.0.0"),
+		pocketbase.WithBasePath("/api/mcp"),
+	)
+
+	// Add tools to the plugin
+	echoTool := tools.NewTool("echo",
+		tools.WithDescription("Echoes back the input message"),
+		tools.WithString("message",
+			tools.Description("The message to echo back"),
+			tools.Required(),
+		),
+	)
+
+	// Add the tool with a handler
+	plugin.AddTool(echoTool, func(ctx context.Context, request pocketbase.ToolCallRequest) (interface{}, error) {
+		message := request.Parameters["message"].(string)
+		return map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": message,
+				},
+			},
+		}, nil
+	})
+
+	// Register the plugin with PocketBase
+	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
+		// Register the plugin
+		return plugin.RegisterWithPocketBase(app)
+	})
+
+	// Start the PocketBase app
+	if err := app.Start(); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+For more detailed documentation on embedding Cortex, see the [Embedding Guide](docs/embedding.md).
 
 ## Examples
 

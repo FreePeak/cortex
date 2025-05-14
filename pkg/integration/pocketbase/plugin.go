@@ -154,28 +154,129 @@ func (p *CortexPlugin) RegisterWithPocketBase(app interface{}) error {
 			basePath := strings.TrimSuffix(p.basePath, "/")
 
 			// Register the SSE endpoint with GET method
+			// IMPORTANT: Use a custom handler that guarantees correct Content-Type
 			sseEndpoint := basePath + "/sse"
 			p.logger.Printf("Registering SSE endpoint at %s", sseEndpoint)
-			router.GET(sseEndpoint, p.GetSSEHandler())
-
-			// Register the streamableHttp endpoint with GET method
-			// IMPORTANT: For streamableHttp, we must return an empty response with 204 No Content
-			// This prevents any automatic content from being sent
-			httpEndpoint := basePath + "/streamableHttp"
-			p.logger.Printf("Registering streamableHttp endpoint at %s", httpEndpoint)
-			router.GET(httpEndpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			router.GET(sseEndpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Clear all headers to prevent any middleware from adding them
 				for k := range w.Header() {
 					w.Header().Del(k)
 				}
 
-				// Set CORS headers only
+				// Set SSE headers in the exact required order
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+
+				// Verify headers were set correctly
+				contentType := w.Header().Get("Content-Type")
+				if contentType != "text/event-stream" {
+					p.logger.Printf("ERROR: Content-Type not set correctly! Got: %s", contentType)
+					http.Error(w, "Server configuration error - invalid content type: "+contentType, http.StatusInternalServerError)
+					return
+				}
+
+				// Delegate to the SSE handler
+				p.GetSSEHandler().ServeHTTP(w, r)
+			}))
+
+			// Register the streamableHttp endpoint
+			httpEndpoint := basePath + "/streamableHttp"
+			p.logger.Printf("Registering streamableHttp endpoint at %s", httpEndpoint)
+
+			// Register a dedicated handler that processes both GET and POST
+			router.ANY(httpEndpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				p.logger.Printf("streamableHttp direct handler: %s %s", r.Method, r.URL.Path)
+
+				// Clear all headers to prevent any middleware from adding them
+				for k := range w.Header() {
+					w.Header().Del(k)
+				}
+
+				// Set proper headers for all responses
+				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-				// Return 204 No Content - this is critical to prevent any automatic content
-				w.WriteHeader(http.StatusNoContent)
+				// Handle different HTTP methods
+				switch r.Method {
+				case http.MethodOptions:
+					// For OPTIONS requests (CORS preflight), just return OK
+					w.WriteHeader(http.StatusOK)
+					return
+
+				case http.MethodGet:
+					// For GET requests, return server info in JSON-RPC 2.0 format
+					serverInfo := p.GetServerInfo()
+					response := map[string]interface{}{
+						"jsonrpc": "2.0",
+						"result": map[string]interface{}{
+							"name":    serverInfo.Name,
+							"version": serverInfo.Version,
+							"status":  "ready",
+							"endpoints": map[string]string{
+								"sse":            p.basePath + "/sse",
+								"message":        p.basePath + "/message",
+								"tools":          p.basePath + "/tools",
+								"streamableHttp": p.basePath + "/streamableHttp",
+							},
+						},
+						"id": "server.info",
+					}
+					json.NewEncoder(w).Encode(response)
+					return
+
+				case http.MethodPost:
+					// For POST requests, process JSON-RPC messages
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						p.logger.Printf("Error reading request body: %v", err)
+						sendJSONRPCError(w, nil, -32700, "Error reading request body")
+						return
+					}
+
+					// Only process if there's actual content
+					if len(body) > 0 {
+						var request map[string]interface{}
+						if err := json.Unmarshal(body, &request); err != nil {
+							p.logger.Printf("Error parsing JSON: %v", err)
+							sendJSONRPCError(w, nil, -32700, "Parse error")
+							return
+						}
+
+						// Extract method and ID
+						method, _ := request["method"].(string)
+						id := request["id"]
+
+						// Check JSONRPC version
+						version, _ := request["jsonrpc"].(string)
+						if version != "2.0" {
+							sendJSONRPCError(w, id, -32600, "Invalid Request: only JSON-RPC 2.0 is supported")
+							return
+						}
+
+						// Handle the request using our shared method
+						if method != "" {
+							p.handleJSONRPCRequest(w, r, method, id, request)
+							return
+						} else {
+							// For invalid/incomplete requests
+							sendJSONRPCError(w, id, -32600, "Invalid Request: missing method")
+							return
+						}
+					} else {
+						// Empty POST
+						sendJSONRPCError(w, nil, -32700, "Empty request")
+						return
+					}
+
+				default:
+					// Method not allowed
+					sendJSONRPCError(w, nil, -32600, "Method not allowed")
+					return
+				}
 			}))
 
 			// Register the message endpoint with POST method
@@ -276,7 +377,8 @@ func (p *CortexPlugin) GetSSEHandler() http.Handler {
 		flusher.Flush()
 
 		// Send the endpoint event - IMPORTANT: Must match exact Cortex server format
-		fmt.Fprintf(w, "event: endpoint\ndata: \"%s\"\n\n", messageEndpoint)
+		// Don't include quotes around the endpoint to prevent malformed URLs
+		fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", messageEndpoint)
 		flusher.Flush()
 
 		// DO NOT send any server info message here - client will request when needed
@@ -343,17 +445,52 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 		// Handle direct streamableHttp connection attempts
 		// This is typically the first connection the client tries before falling back to SSE
 		if relPath == "/streamableHttp" || strings.HasSuffix(relPath, "/streamableHttp") {
-			p.logger.Printf("Handling streamableHttp request")
+			p.logger.Printf("Handling streamableHttp request at %s", r.URL.Path)
 
-			// For streamableHttp, don't send any automatic content
-			// Just upgrade the connection if needed, or respond to specific requests
-			// The client should initiate any communication with specific message IDs
+			// Clear all headers to prevent any middleware from adding them
+			for k := range w.Header() {
+				w.Header().Del(k)
+			}
 
-			// If it's a POST request with a specific JSON-RPC message, process it
-			if r.Method == http.MethodPost {
-				// Read and process any incoming JSON-RPC message
+			// Set proper headers
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+			// Handle different HTTP methods
+			switch r.Method {
+			case http.MethodOptions:
+				// For OPTIONS requests (CORS preflight), just return OK
+				w.WriteHeader(http.StatusOK)
+				return
+
+			case http.MethodGet:
+				// For GET requests, return server info in JSON-RPC 2.0 format
+				serverInfo := p.GetServerInfo()
+				response := map[string]interface{}{
+					"jsonrpc": "2.0",
+					"result": map[string]interface{}{
+						"name":    serverInfo.Name,
+						"version": serverInfo.Version,
+						"status":  "ready",
+						"endpoints": map[string]string{
+							"sse":            p.basePath + "/sse",
+							"message":        p.basePath + "/message",
+							"tools":          p.basePath + "/tools",
+							"streamableHttp": p.basePath + "/streamableHttp",
+						},
+					},
+					"id": "server.info",
+				}
+				json.NewEncoder(w).Encode(response)
+				return
+
+			case http.MethodPost:
+				// For POST requests, process JSON-RPC messages
 				body, err := io.ReadAll(r.Body)
 				if err != nil {
+					p.logger.Printf("Error reading request body: %v", err)
 					sendJSONRPCError(w, nil, -32700, "Error reading request body")
 					return
 				}
@@ -362,28 +499,42 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 				if len(body) > 0 {
 					var request map[string]interface{}
 					if err := json.Unmarshal(body, &request); err != nil {
+						p.logger.Printf("Error parsing JSON: %v", err)
 						sendJSONRPCError(w, nil, -32700, "Parse error")
 						return
 					}
 
-					// Extract method and ID - only respond to specific requests
+					// Extract method and ID
 					method, _ := request["method"].(string)
 					id := request["id"]
 
-					// Handle the request and send a response with matching ID
-					// This follows the Cortex server pattern
-					p.handleJSONRPCRequest(w, r, method, id, request)
+					// Check JSONRPC version
+					version, _ := request["jsonrpc"].(string)
+					if version != "2.0" {
+						sendJSONRPCError(w, id, -32600, "Invalid Request: only JSON-RPC 2.0 is supported")
+						return
+					}
+
+					// Handle the request using our shared method
+					if method != "" {
+						p.handleJSONRPCRequest(w, r, method, id, request)
+						return
+					} else {
+						// For invalid/incomplete requests
+						sendJSONRPCError(w, id, -32600, "Invalid Request: missing method")
+						return
+					}
 				} else {
-					// For empty requests, don't send anything
-					// The client is just establishing a connection
-					w.WriteHeader(http.StatusOK)
+					// Empty POST
+					sendJSONRPCError(w, nil, -32700, "Empty request")
+					return
 				}
+
+			default:
+				// Method not allowed
+				sendJSONRPCError(w, nil, -32600, "Method not allowed")
 				return
 			}
-
-			// For GET requests, just establish the connection without sending content
-			w.WriteHeader(http.StatusOK)
-			return
 		}
 
 		// Handle specific MCP endpoints directly instead of using the embeddable server
@@ -481,6 +632,9 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 							"type":        param.Type,
 							"required":    param.Required,
 						}
+						if param.Items != nil {
+							paramInfo["items"] = param.Items
+						}
 						params = append(params, paramInfo)
 					}
 
@@ -488,8 +642,15 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 					tools = append(tools, toolInfo)
 				}
 
-				// Return the tools as a plain array (not JSON-RPC)
-				json.NewEncoder(w).Encode(tools)
+				// Return the tools list in JSON-RPC 2.0 format
+				response := map[string]interface{}{
+					"jsonrpc": "2.0",
+					"result": map[string]interface{}{
+						"tools": tools,
+					},
+					"id": "tools.list",
+				}
+				json.NewEncoder(w).Encode(response)
 				return
 			}
 
@@ -498,16 +659,21 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				serverInfo := p.GetServerInfo()
 
-				// Use simple object format (not JSON-RPC)
+				// Use JSON-RPC 2.0 format for server info to be compatible with client expectations
 				response := map[string]interface{}{
-					"name":    serverInfo.Name,
-					"version": serverInfo.Version,
-					"status":  "ready",
-					"endpoints": map[string]string{
-						"sse":     p.basePath + "/sse",
-						"message": p.basePath + "/message",
-						"tools":   p.basePath + "/tools",
+					"jsonrpc": "2.0",
+					"result": map[string]interface{}{
+						"name":    serverInfo.Name,
+						"version": serverInfo.Version,
+						"status":  "ready",
+						"endpoints": map[string]string{
+							"sse":            p.basePath + "/sse",
+							"message":        p.basePath + "/message",
+							"tools":          p.basePath + "/tools",
+							"streamableHttp": p.basePath + "/streamableHttp",
+						},
 					},
+					"id": "server.info",
 				}
 				json.NewEncoder(w).Encode(response)
 				return

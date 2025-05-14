@@ -13,12 +13,12 @@ GOMOD=$(GOCMD) mod
 STDIO_SERVER=examples/stdio-server/main.go
 SSE_SERVER=examples/sse-server/main.go
 MULTI_PROTOCOL_SERVER=examples/multi-protocol/main.go
-
+POCKETBASE_SERVER=examples/pocketbase/main.go
 # Binary paths
 BIN_DIR=bin
 STDIO_BIN=$(BIN_DIR)/stdio-server
 SSE_BIN=$(BIN_DIR)/sse-server
-MULTI_BIN=$(BIN_DIR)/multi-protocol-server
+MULTI_BIN=$(BIN_DIR)/multi-protocolr-server
 
 help:
 	@echo "Available commands:"
@@ -57,6 +57,8 @@ example-multi:
 example-multi-http:
 	$(GOCMD) run $(MULTI_PROTOCOL_SERVER) -protocol http -address localhost:8080
 
+example-pocketbase:
+	$(GOCMD) run $(POCKETBASE_SERVER) -port 8090
 test:
 	$(GOTEST) ./... -v -race -cover
 
