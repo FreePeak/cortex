@@ -44,6 +44,7 @@ type Tool struct {
 	Name        string
 	Description string
 	Parameters  []ToolParameter
+	InputSchema map[string]interface{} `json:"inputSchema,omitempty"`
 }
 
 // ToolParameter defines a parameter for a tool.
