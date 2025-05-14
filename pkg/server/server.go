@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/FreePeak/cortex/internal/builder"
 	"github.com/FreePeak/cortex/internal/domain"
@@ -24,16 +25,23 @@ type ToolCallRequest struct {
 	Session    *types.ClientSession
 }
 
+// SessionCallback is a function that is called when messages need to be sent to a client.
+type SessionCallback func([]byte) error
+
 // MCPServer represents an MCP server that can be used to handle MCP protocol messages.
 // It supports both static tool registration and dynamic provider-based tools.
 type MCPServer struct {
-	name     string
-	version  string
-	tools    map[string]*types.Tool
-	handlers map[string]ToolHandler
-	registry plugin.Registry
-	builder  *builder.ServerBuilder
-	logger   *log.Logger
+	name        string
+	version     string
+	tools       map[string]*types.Tool
+	handlers    map[string]ToolHandler
+	registry    plugin.Registry
+	builder     *builder.ServerBuilder
+	logger      *log.Logger
+	embedMode   bool // When true, the server is configured for embedding in other apps
+	sessionMu   sync.RWMutex
+	sessions    map[string]SessionCallback
+	sessionInfo map[string]string // Maps session ID to user agent
 }
 
 // NewMCPServer creates a new MCP server with the specified name and version.
@@ -45,13 +53,15 @@ func NewMCPServer(name, version string, logger *log.Logger) *MCPServer {
 	registry := plugin.NewRegistry(logger)
 
 	return &MCPServer{
-		name:     name,
-		version:  version,
-		tools:    make(map[string]*types.Tool),
-		handlers: make(map[string]ToolHandler),
-		registry: registry,
-		builder:  builder.NewServerBuilder().WithName(name).WithVersion(version),
-		logger:   logger,
+		name:        name,
+		version:     version,
+		tools:       make(map[string]*types.Tool),
+		handlers:    make(map[string]ToolHandler),
+		registry:    registry,
+		builder:     builder.NewServerBuilder().WithName(name).WithVersion(version),
+		logger:      logger,
+		sessions:    make(map[string]SessionCallback),
+		sessionInfo: make(map[string]string),
 	}
 }
 
@@ -298,4 +308,69 @@ func convertToInternalTool(tool *types.Tool) *domain.Tool {
 	}
 
 	return internalTool
+}
+
+// RegisterSession registers a new client session with the server.
+// It returns an error if the session already exists.
+func (s *MCPServer) RegisterSession(sessionID string, userAgent string, callback func([]byte) error) error {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+
+	if _, exists := s.sessions[sessionID]; exists {
+		return fmt.Errorf("session already exists: %s", sessionID)
+	}
+
+	s.sessions[sessionID] = callback
+	s.sessionInfo[sessionID] = userAgent
+	s.logger.Printf("Registered session: %s, user agent: %s", sessionID, userAgent)
+	return nil
+}
+
+// UnregisterSession removes a client session from the server.
+// It returns an error if the session does not exist.
+func (s *MCPServer) UnregisterSession(sessionID string) error {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+
+	if _, exists := s.sessions[sessionID]; !exists {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	delete(s.sessions, sessionID)
+	delete(s.sessionInfo, sessionID)
+	s.logger.Printf("Unregistered session: %s", sessionID)
+	return nil
+}
+
+// ExecuteTool executes a tool with the given request.
+func (s *MCPServer) ExecuteTool(ctx context.Context, request ToolCallRequest) (interface{}, error) {
+	s.logger.Printf("Executing tool: %s", request.Name)
+
+	// Find the handler for this tool
+	handler, ok := s.handlers[request.Name]
+	if !ok {
+		return nil, fmt.Errorf("tool not found: %s", request.Name)
+	}
+
+	// Execute the tool
+	return handler(ctx, request)
+}
+
+// SendToSession sends a message to a specific session.
+func (s *MCPServer) SendToSession(sessionID string, message []byte) error {
+	s.sessionMu.RLock()
+	callback, exists := s.sessions[sessionID]
+	s.sessionMu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Call the callback function to send the message
+	return callback(message)
+}
+
+// GetTools returns all registered tools.
+func (s *MCPServer) GetTools() map[string]*types.Tool {
+	return s.tools
 }
