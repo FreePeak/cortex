@@ -19,7 +19,7 @@ The latest MCP specification includes the following key updates:
 - [x] **Task 1.2**: Implement OAuth 2.1 token validation and verification
 - [x] **Task 1.3**: Create middleware for OAuth token validation
 - [x] **Task 1.4**: Add scope-based permission system for tool access
-- [ ] **Task 1.5**: Update PocketBase integration to support OAuth 2.1
+- [x] **Task 1.5**: Update PocketBase integration to support OAuth 2.1
 - [ ] **Task 1.6**: Create documentation for authorization setup and configuration
 - [ ] **Task 1.7**: Implement tests for OAuth authentication flows
 
