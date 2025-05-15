@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -77,16 +76,15 @@ type ScopeChecker interface {
 
 // OAuthMiddleware provides middleware for OAuth 2.1 authentication
 type OAuthMiddleware struct {
-	validator TokenValidator
-	checker   ScopeChecker
+	validator       TokenValidator
+	checker         ScopeChecker
+	config          *OAuthConfig
+	tokenExtractors []tokenExtractor
 }
 
 // NewOAuthMiddleware creates a new OAuthMiddleware with the provided token validator
 func NewOAuthMiddleware(validator TokenValidator) *OAuthMiddleware {
-	return &OAuthMiddleware{
-		validator: validator,
-		checker:   &defaultScopeChecker{},
-	}
+	return NewOAuthMiddlewareWithConfig(validator, DefaultOAuthConfig())
 }
 
 // WithScopeChecker sets a custom scope checker for the middleware
@@ -98,21 +96,12 @@ func (m *OAuthMiddleware) WithScopeChecker(checker ScopeChecker) *OAuthMiddlewar
 // Middleware returns an http.Handler middleware that validates OAuth tokens
 func (m *OAuthMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Extract token from Authorization header
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Unauthorized: Missing authorization header", http.StatusUnauthorized)
+		// Extract token from request using configured extractors
+		token := m.extractToken(r)
+		if token == "" {
+			http.Error(w, "Unauthorized: Missing or invalid token", http.StatusUnauthorized)
 			return
 		}
-
-		// Check for Bearer token
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			http.Error(w, "Unauthorized: Invalid authorization header format", http.StatusUnauthorized)
-			return
-		}
-
-		token := parts[1]
 
 		// Validate token
 		claims, err := m.validator.ValidateToken(r.Context(), token)
