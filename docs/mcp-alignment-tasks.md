@@ -16,7 +16,7 @@ The latest MCP specification includes the following key updates:
 ### 1. OAuth 2.1 Authorization Framework
 
 - [x] **Task 1.1**: Define OAuth 2.1 authentication interfaces in `pkg/server/auth.go`
-- [ ] **Task 1.2**: Implement OAuth 2.1 token validation and verification
+- [x] **Task 1.2**: Implement OAuth 2.1 token validation and verification
 - [ ] **Task 1.3**: Create middleware for OAuth token validation
 - [ ] **Task 1.4**: Add scope-based permission system for tool access
 - [ ] **Task 1.5**: Update PocketBase integration to support OAuth 2.1
