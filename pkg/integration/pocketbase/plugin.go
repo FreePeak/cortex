@@ -15,6 +15,19 @@ import (
 	"github.com/FreePeak/cortex/pkg/types"
 )
 
+// contextKey is a custom type to use as keys in context.WithValue to avoid collisions
+type contextKey string
+
+// Define keys used in context
+const (
+	sessionIDKey contextKey = "sessionId"
+)
+
+// encodeJSON encodes the given value to JSON and writes it to the writer, handling errors
+func encodeJSON(w http.ResponseWriter, v interface{}) error {
+	return json.NewEncoder(w).Encode(v)
+}
+
 // CortexPlugin is a PocketBase plugin that provides Cortex MCP server capabilities.
 type CortexPlugin struct {
 	name      string
@@ -255,7 +268,11 @@ func (p *CortexPlugin) RegisterWithPocketBase(app interface{}) error {
 						},
 						"id": "server.info",
 					}
-					json.NewEncoder(w).Encode(response)
+					if err := encodeJSON(w, response); err != nil {
+						p.logger.Printf("Error encoding JSON response: %v", err)
+						http.Error(w, "Error encoding response", http.StatusInternalServerError)
+						return
+					}
 					return
 
 				case http.MethodPost:
@@ -381,7 +398,7 @@ func (p *CortexPlugin) GetSSEHandler() http.Handler {
 		eventQueue := make(chan string, 100)
 		defer close(eventQueue)
 
-		// Register this session with the MCP server
+		// Register this session with the MCP server then handle unregistration
 		err := p.mcpServer.RegisterSession(sessionID, userAgent, func(msg []byte) error {
 			select {
 			case eventQueue <- fmt.Sprintf("event: message\ndata: %s\n\n", msg):
@@ -397,7 +414,13 @@ func (p *CortexPlugin) GetSSEHandler() http.Handler {
 			http.Error(w, "Could not register session", http.StatusInternalServerError)
 			return
 		}
-		defer p.mcpServer.UnregisterSession(sessionID)
+
+		// Ensure we unregister the session when done and handle any error
+		defer func() {
+			if err := p.mcpServer.UnregisterSession(sessionID); err != nil {
+				p.logger.Printf("Error unregistering session %s: %v", sessionID, err)
+			}
+		}()
 
 		// The message endpoint
 		messageEndpoint := fmt.Sprintf("%s/message?sessionId=%s", p.basePath, sessionID)
@@ -513,7 +536,11 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 					},
 					"id": "server.info",
 				}
-				json.NewEncoder(w).Encode(response)
+				if err := encodeJSON(w, response); err != nil {
+					p.logger.Printf("Error encoding JSON response: %v", err)
+					http.Error(w, "Error encoding response", http.StatusInternalServerError)
+					return
+				}
 				return
 
 			case http.MethodPost:
@@ -737,7 +764,10 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 				p.logger.Printf("tools/list response: %s", string(respBytes))
 
 				// Return the tools list in JSON-RPC 2.0 format
-				json.NewEncoder(w).Encode(responseObj)
+				if err := encodeJSON(w, responseObj); err != nil {
+					p.logger.Printf("Error encoding JSON response: %v", err)
+					http.Error(w, "Error encoding response", http.StatusInternalServerError)
+				}
 				return
 			}
 
@@ -762,7 +792,11 @@ func (p *CortexPlugin) GetHTTPHandler() http.Handler {
 					},
 					"id": "server.info",
 				}
-				json.NewEncoder(w).Encode(response)
+				if err := encodeJSON(w, response); err != nil {
+					p.logger.Printf("Error encoding JSON response: %v", err)
+					http.Error(w, "Error encoding response", http.StatusInternalServerError)
+					return
+				}
 				return
 			}
 
@@ -809,13 +843,20 @@ func sendJSONRPCError(w http.ResponseWriter, id interface{}, code int, message s
 	if err != nil {
 		// If we can't marshal the error, send a simple error
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal JSON-RPC error"},"id":null}`))
+		_, writeErr := w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal JSON-RPC error"},"id":null}`))
+		if writeErr != nil {
+			// Log the write error but we've already set the status code
+			log.Printf("Error writing error response: %v", writeErr)
+		}
 		return
 	}
 
 	// Send the response
 	w.WriteHeader(http.StatusOK) // Always 200 OK for JSON-RPC, error is in the response
-	w.Write(responseBytes)
+	_, writeErr := w.Write(responseBytes)
+	if writeErr != nil {
+		log.Printf("Error writing JSON-RPC response: %v", writeErr)
+	}
 }
 
 // preserveSSEHeaders creates a middleware that preserves SSE headers
@@ -882,7 +923,7 @@ func (p *CortexPlugin) handleJSONRPCRequest(w http.ResponseWriter, r *http.Reque
 	// Create a context that may include the session ID
 	ctx := r.Context()
 	if sessionID != "" {
-		ctx = context.WithValue(ctx, "sessionId", sessionID)
+		ctx = context.WithValue(ctx, sessionIDKey, sessionID)
 	}
 
 	var response map[string]interface{}
@@ -1053,26 +1094,27 @@ func (p *CortexPlugin) handleJSONRPCRequest(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Send response
-	if response != nil {
-		// Marshal response
-		respBytes, err := json.Marshal(response)
+	// Send response - no need to check if response is nil as it's always initialized
+	// Marshal response
+	respBytes, err := json.Marshal(response)
+	if err != nil {
+		sendJSONRPCError(w, id, -32603, "Internal error serializing response")
+		return
+	}
+
+	// Send through both SSE channel and HTTP response if session exists
+	if sessionID != "" {
+		err = p.mcpServer.SendToSession(sessionID, respBytes)
 		if err != nil {
-			sendJSONRPCError(w, id, -32603, "Internal error serializing response")
-			return
+			p.logger.Printf("Warning: Could not send response via SSE: %v", err)
 		}
+	}
 
-		// Send through both SSE channel and HTTP response if session exists
-		if sessionID != "" {
-			err = p.mcpServer.SendToSession(sessionID, respBytes)
-			if err != nil {
-				p.logger.Printf("Warning: Could not send response via SSE: %v", err)
-			}
-		}
-
-		// Write HTTP response
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(respBytes)
+	// Write HTTP response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, writeErr := w.Write(respBytes)
+	if writeErr != nil {
+		p.logger.Printf("Error writing HTTP response: %v", writeErr)
 	}
 }

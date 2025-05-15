@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 
 	"github.com/FreePeak/cortex/pkg/types"
@@ -73,7 +74,11 @@ func (s *MCPServer) ToHTTPHandler() http.Handler {
 
 				// Send the server info - using JSON-RPC 2.0 format
 				serverInfo := `{"jsonrpc":"2.0","result":{"name":"` + s.name + `","version":"` + s.version + `","status":"running"},"id":"server.info"}`
-				w.Write([]byte("event: server\ndata: " + serverInfo + "\n\n"))
+				_, err := w.Write([]byte("event: server\ndata: " + serverInfo + "\n\n"))
+				if err != nil {
+					log.Printf("Error writing SSE server info: %v", err)
+					return
+				}
 
 				// Keep the connection open
 				<-r.Context().Done()
@@ -84,7 +89,11 @@ func (s *MCPServer) ToHTTPHandler() http.Handler {
 				// Return JSON-RPC 2.0 formatted server info for status requests
 				w.Header().Set("Content-Type", "application/json")
 				jsonResponse := `{"jsonrpc":"2.0","result":{"name":"` + s.name + `","version":"` + s.version + `","status":"running"},"id":"server.info"}`
-				w.Write([]byte(jsonResponse))
+				_, err := w.Write([]byte(jsonResponse))
+				if err != nil {
+					log.Printf("Error writing status response: %v", err)
+					return
+				}
 				return
 			}
 
