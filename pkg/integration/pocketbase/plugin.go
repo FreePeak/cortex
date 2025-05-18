@@ -30,12 +30,15 @@ func encodeJSON(w http.ResponseWriter, v interface{}) error {
 
 // CortexPlugin is a PocketBase plugin that provides Cortex MCP server capabilities.
 type CortexPlugin struct {
-	name      string
-	version   string
-	basePath  string
-	logger    *log.Logger
-	mcpServer server.Embeddable
-	port      int
+	name            string
+	version         string
+	basePath        string
+	logger          *log.Logger
+	mcpServer       server.Embeddable
+	port            int
+	oauthMiddleware *server.OAuthMiddleware
+	oauthConfig     *server.OAuthConfig
+	toolPermissions *server.ToolPermissions
 }
 
 // ToolCallRequest represents a request to execute a tool.
@@ -117,6 +120,41 @@ func NewCortexPlugin(opts ...Option) *CortexPlugin {
 	return plugin
 }
 
+// WithOAuth adds OAuth 2.1 middleware to the plugin
+func (p *CortexPlugin) WithOAuth(middleware *server.OAuthMiddleware) *CortexPlugin {
+	p.oauthMiddleware = middleware
+	p.toolPermissions = server.NewToolPermissions(middleware)
+	return p
+}
+
+// WithOAuthConfig sets the OAuth 2.1 configuration
+func (p *CortexPlugin) WithOAuthConfig(config *server.OAuthConfig) *CortexPlugin {
+	p.oauthConfig = config
+	return p
+}
+
+// GetOAuthHandler returns an HTTP handler wrapped with OAuth middleware
+func (p *CortexPlugin) GetOAuthHandler(next http.Handler) http.Handler {
+	if p.oauthMiddleware == nil {
+		p.logger.Printf("Warning: OAuth middleware not configured, requests will not be authenticated")
+		return next
+	}
+	return p.oauthMiddleware.Middleware(next)
+}
+
+// GetToolPermissionHandler returns an HTTP handler that checks for tool permissions
+func (p *CortexPlugin) GetToolPermissionHandler(toolName string, permission server.ToolPermission, next http.Handler) http.Handler {
+	if p.oauthMiddleware == nil || p.toolPermissions == nil {
+		p.logger.Printf("Warning: OAuth middleware not configured, tool permissions will not be enforced")
+		return next
+	}
+
+	// First apply OAuth middleware, then check tool permissions
+	return p.oauthMiddleware.Middleware(
+		p.toolPermissions.RequireToolPermission(toolName, permission, next),
+	)
+}
+
 // AddTool adds a tool to the Cortex server.
 func (p *CortexPlugin) AddTool(tool *types.Tool, handler func(ctx context.Context, request ToolCallRequest) (interface{}, error)) error {
 	// Add inputSchema to tool based on parameters
@@ -196,146 +234,60 @@ func (p *CortexPlugin) RegisterWithPocketBase(app interface{}) error {
 			// Register the routes
 			basePath := strings.TrimSuffix(p.basePath, "/")
 
+			// If OAuth is configured, apply it as global middleware
+			if p.oauthMiddleware != nil {
+				p.logger.Printf("Applying OAuth 2.1 middleware to routes")
+				router.Use(func(next http.Handler) http.Handler {
+					return p.oauthMiddleware.Middleware(next)
+				})
+			}
+
 			// Register the SSE endpoint with GET method
 			// IMPORTANT: Use a custom handler that guarantees correct Content-Type
-			sseEndpoint := basePath + "/sse"
-			p.logger.Printf("Registering SSE endpoint at %s", sseEndpoint)
-			router.GET(sseEndpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Clear all headers to prevent any middleware from adding them
-				for k := range w.Header() {
-					w.Header().Del(k)
+			router.GET(basePath+"/sse", p.GetSSEHandler())
+
+			// Register the JSON-RPC message endpoint with POST method
+			router.POST(basePath+"/message", p.GetHTTPHandler())
+
+			// Register all tools endpoint
+			router.GET(basePath+"/tools", func(w http.ResponseWriter, r *http.Request) {
+				// Set proper headers for JSON response
+				w.Header().Set("Content-Type", "application/json")
+
+				// Get the tools from the MCP server
+				tools := p.mcpServer.GetTools()
+
+				// Convert to a list for the response
+				toolList := make([]interface{}, 0, len(tools))
+				for _, tool := range tools {
+					toolList = append(toolList, tool)
 				}
 
-				// Set SSE headers in the exact required order
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.Header().Set("Cache-Control", "no-cache")
-				w.Header().Set("Connection", "keep-alive")
-				w.Header().Set("Access-Control-Allow-Origin", "*")
+				// Create the JSON-RPC response
+				response := map[string]interface{}{
+					"jsonrpc": "2.0",
+					"result":  toolList,
+					"id":      "tools.list",
+				}
 
-				// Verify headers were set correctly
-				contentType := w.Header().Get("Content-Type")
-				if contentType != "text/event-stream" {
-					p.logger.Printf("ERROR: Content-Type not set correctly! Got: %s", contentType)
-					http.Error(w, "Server configuration error - invalid content type: "+contentType, http.StatusInternalServerError)
+				// Encode and send
+				if err := encodeJSON(w, response); err != nil {
+					p.logger.Printf("Error encoding tools list response: %v", err)
+					http.Error(w, "Error encoding response", http.StatusInternalServerError)
 					return
 				}
-
-				// Delegate to the SSE handler
-				p.GetSSEHandler().ServeHTTP(w, r)
-			}))
+			})
 
 			// Register the streamableHttp endpoint
-			httpEndpoint := basePath + "/streamableHttp"
-			p.logger.Printf("Registering streamableHttp endpoint at %s", httpEndpoint)
+			router.ANY(basePath+"/streamableHttp", p.GetHTTPHandler())
 
-			// Register a dedicated handler that processes both GET and POST
-			router.ANY(httpEndpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				p.logger.Printf("streamableHttp direct handler: %s %s", r.Method, r.URL.Path)
+			// Register a generic catch-all route for all other MCP requests
+			router.ANY(basePath+"/*", p.GetHTTPHandler())
 
-				// Clear all headers to prevent any middleware from adding them
-				for k := range w.Header() {
-					w.Header().Del(k)
-				}
-
-				// Set proper headers for all responses
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-				// Handle different HTTP methods
-				switch r.Method {
-				case http.MethodOptions:
-					// For OPTIONS requests (CORS preflight), just return OK
-					w.WriteHeader(http.StatusOK)
-					return
-
-				case http.MethodGet:
-					// For GET requests, return server info in JSON-RPC 2.0 format
-					serverInfo := p.GetServerInfo()
-					response := map[string]interface{}{
-						"jsonrpc": "2.0",
-						"result": map[string]interface{}{
-							"name":    serverInfo.Name,
-							"version": serverInfo.Version,
-							"status":  "ready",
-							"endpoints": map[string]string{
-								"sse":            p.basePath + "/sse",
-								"message":        p.basePath + "/message",
-								"tools":          p.basePath + "/tools",
-								"streamableHttp": p.basePath + "/streamableHttp",
-							},
-						},
-						"id": "server.info",
-					}
-					if err := encodeJSON(w, response); err != nil {
-						p.logger.Printf("Error encoding JSON response: %v", err)
-						http.Error(w, "Error encoding response", http.StatusInternalServerError)
-						return
-					}
-					return
-
-				case http.MethodPost:
-					// For POST requests, process JSON-RPC messages
-					body, err := io.ReadAll(r.Body)
-					if err != nil {
-						p.logger.Printf("Error reading request body: %v", err)
-						sendJSONRPCError(w, nil, -32700, "Error reading request body")
-						return
-					}
-
-					// Only process if there's actual content
-					if len(body) > 0 {
-						var request map[string]interface{}
-						if err := json.Unmarshal(body, &request); err != nil {
-							p.logger.Printf("Error parsing JSON: %v", err)
-							sendJSONRPCError(w, nil, -32700, "Parse error")
-							return
-						}
-
-						// Extract method and ID
-						method, _ := request["method"].(string)
-						id := request["id"]
-
-						// Check JSONRPC version
-						version, _ := request["jsonrpc"].(string)
-						if version != "2.0" {
-							sendJSONRPCError(w, id, -32600, "Invalid Request: only JSON-RPC 2.0 is supported")
-							return
-						}
-
-						// Handle the request using our shared method
-						if method != "" {
-							p.handleJSONRPCRequest(w, r, method, id, request)
-							return
-						} else {
-							// For invalid/incomplete requests
-							sendJSONRPCError(w, id, -32600, "Invalid Request: missing method")
-							return
-						}
-					} else {
-						// Empty POST
-						sendJSONRPCError(w, nil, -32700, "Empty request")
-						return
-					}
-
-				default:
-					// Method not allowed
-					sendJSONRPCError(w, nil, -32600, "Method not allowed")
-					return
-				}
-			}))
-
-			// Register the message endpoint with POST method
-			messageEndpoint := basePath + "/message"
-			p.logger.Printf("Registering message endpoint at %s", messageEndpoint)
-			router.POST(messageEndpoint, p.GetHTTPHandler())
-
-			return nil
+			p.logger.Printf("Registered all Cortex routes under %s", basePath)
 		}
 	}
 
-	p.logger.Printf("WARNING: Could not register Cortex plugin with PocketBase. Manual integration required.")
 	return nil
 }
 

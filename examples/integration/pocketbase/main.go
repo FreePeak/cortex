@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/FreePeak/cortex/pkg/integration/pocketbase"
+	"github.com/FreePeak/cortex/pkg/server"
 	"github.com/FreePeak/cortex/pkg/tools"
 )
 
@@ -74,6 +75,13 @@ func (m *MockPocketBase) Start(port int) error {
 		// First, check if the request is for the home page
 		if r.URL.Path == "/" {
 			fmt.Fprintf(w, "Mock PocketBase Server with Cortex MCP integration. Access MCP at /api/mcp")
+			return
+		}
+
+		// Authorization endpoint for testing OAuth tokens
+		if r.URL.Path == "/auth/token" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"access_token":"mock-token","token_type":"bearer","expires_in":3600,"scope":"cortex:tool:read cortex:tool:execute:echo"}`)
 			return
 		}
 
@@ -268,40 +276,65 @@ func (m *MockPocketBase) preserveSSEHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// MockTokenValidator simulates validating OAuth 2.1 tokens
+type MockTokenValidator struct{}
+
+// ValidateToken validates a mock token for testing
+func (v *MockTokenValidator) ValidateToken(ctx context.Context, token string) (*server.TokenClaims, error) {
+	// In a real application, this would validate the token with an auth server
+	// For this example, we'll accept "mock-token" as valid
+	if token == "mock-token" {
+		return &server.TokenClaims{
+			Subject:   "user123",
+			Issuer:    "example-issuer",
+			Audience:  []string{"cortex-api"},
+			ExpiresAt: time.Now().Add(time.Hour),
+			IssuedAt:  time.Now(),
+			Scopes:    []string{"cortex:tool:read", "cortex:tool:execute:echo"},
+			Claims:    map[string]interface{}{},
+		}, nil
+	}
+	return nil, server.ErrInvalidToken
+}
+
 func main() {
-	// Parse command line flags
-	var dataDir string
-	var serverPort int
-	flag.StringVar(&dataDir, "data", "./pb_data", "PocketBase data directory")
-	flag.IntVar(&serverPort, "port", 8080, "Server port")
+	// Process command line flags
+	var port int
+	flag.IntVar(&port, "port", 8090, "Port to run the server on")
 	flag.Parse()
 
-	// Ensure the data directory exists
-	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
-		log.Fatalf("Failed to create data directory: %v", err)
-	}
-	absDataDir, err := filepath.Abs(dataDir)
-	if err != nil {
-		log.Fatalf("Failed to resolve absolute path: %v", err)
-	}
-	log.Printf("Using data directory: %s", absDataDir)
-
-	// Create a logger with more context
+	// Setup logging
 	logger := log.New(os.Stderr, "[cortex] ", log.LstdFlags|log.Lmicroseconds)
 
-	// Create a new PocketBase app
-	app := NewMockPocketBase()
-
-	// Initialize the Cortex plugin with custom options
-	plugin := pocketbase.NewCortexPlugin(
-		pocketbase.WithName("PocketBase MCP Server"),
+	// Create a new Cortex plugin
+	cortexPlugin := pocketbase.NewCortexPlugin(
+		pocketbase.WithName("Cortex PocketBase Integration"),
 		pocketbase.WithVersion("1.0.0"),
-		pocketbase.WithBasePath("/api/mcp"),
 		pocketbase.WithLogger(logger),
-		pocketbase.WithPort(serverPort),
+		pocketbase.WithBasePath("/api/mcp"),
+		pocketbase.WithPort(port),
 	)
 
-	// Add an echo tool
+	// Setup OAuth 2.1 support
+	// In a real application, you would use a proper token validator
+	tokenValidator := &MockTokenValidator{}
+
+	// Create OAuth middleware
+	oauthMiddleware := server.NewOAuthMiddleware(tokenValidator)
+
+	// Configure OAuth settings
+	oauthConfig := &server.OAuthConfig{
+		Issuer:            "example-issuer",
+		Audience:          []string{"cortex-api"},
+		TokenLookupScheme: "header,query",
+		TokenHeaderName:   "Authorization",
+		TokenQueryParam:   "access_token",
+	}
+
+	// Add OAuth to the plugin
+	cortexPlugin.WithOAuth(oauthMiddleware).WithOAuthConfig(oauthConfig)
+
+	// Add a tool
 	echoTool := tools.NewTool("echo",
 		tools.WithDescription("Echoes back the input message"),
 		tools.WithString("message",
@@ -309,7 +342,10 @@ func main() {
 			tools.Required(),
 		),
 	)
-	plugin.AddTool(echoTool, handleEcho)
+
+	if err := cortexPlugin.AddTool(echoTool, handleEcho); err != nil {
+		logger.Fatalf("Failed to add echo tool: %v", err)
+	}
 
 	// Add a weather tool
 	weatherTool := tools.NewTool("weather",
@@ -319,70 +355,70 @@ func main() {
 			tools.Required(),
 		),
 	)
-	plugin.AddTool(weatherTool, handleWeather)
 
-	// Register routes with the PocketBase app
-	// This is the key part to ensure proper integration
-	basePath := plugin.GetBasePath()
-
-	// CRITICAL: We need to ensure SSE and message endpoints are handled DIRECTLY
-	// by their dedicated handlers, BEFORE any catch-all route has a chance
-
-	// Get the raw SSE handler - this handler takes care of its own headers
-	// and will properly implement the event stream protocol
-	sseHandler := plugin.GetSSEHandler()
-	app.RegisterRoute(basePath+"/sse", sseHandler)
-	logger.Printf("Registered direct SSE endpoint: %s/sse (highest priority)", basePath)
-
-	// Register specific endpoints
-	app.RegisterRoute(basePath+"/message", plugin.GetHTTPHandler())
-	app.RegisterRoute(basePath+"/tools", plugin.GetHTTPHandler())
-
-	// Finally register the catch-all route for any other paths under the base path
-	app.RegisterRoute(basePath+"/*", plugin.GetHTTPHandler())
-	logger.Printf("Registered catch-all route: %s/*", basePath)
-
-	// Start the server
-	if err := app.Start(serverPort); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	if err := cortexPlugin.AddTool(weatherTool, handleWeather); err != nil {
+		logger.Fatalf("Failed to add weather tool: %v", err)
 	}
-	log.Printf("Server started on port %d", serverPort)
-	log.Printf("MCP Service available at http://localhost:%d%s", serverPort, basePath)
-	log.Printf("SSE endpoint: http://localhost:%d%s/sse", serverPort, basePath)
-	log.Printf("Message endpoint: http://localhost:%d%s/message", serverPort, basePath)
-	log.Printf("Tools endpoint: http://localhost:%d%s/tools", serverPort, basePath)
-	log.Printf("Test client: http://localhost:%d/test-client.html", serverPort)
 
-	// Handle graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	// Create a mock PocketBase app
+	pb := NewMockPocketBase()
 
-	<-quit
-	log.Println("Shutting down server...")
+	// Register the plugin with PocketBase
+	if err := cortexPlugin.RegisterWithPocketBase(pb); err != nil {
+		logger.Fatalf("Failed to register plugin: %v", err)
+	}
 
-	// Give 5 seconds for graceful shutdown
+	// Start the PocketBase app
+	if err := pb.Start(port); err != nil {
+		logger.Fatalf("Failed to start server: %v", err)
+	}
+
+	// Set up file serving for static files in the current directory
+	// This allows us to serve the test client HTML
+	workingDir, err := os.Getwd()
+	if err != nil {
+		logger.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	http.Handle("/test/", http.StripPrefix("/test/", http.FileServer(http.Dir(workingDir))))
+
+	// Create a data directory if it doesn't exist
+	dataDir := filepath.Join(workingDir, "pb_data")
+	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			logger.Fatalf("Failed to create data directory: %v", err)
+		}
+	}
+
+	// Setup graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	// Wait for interrupt signal
+	<-stop
+
+	logger.Println("Shutting down server...")
+
+	// Create a timeout context for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := app.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+	// Shutdown the server
+	if err := pb.Shutdown(ctx); err != nil {
+		logger.Fatalf("Error during shutdown: %v", err)
 	}
 
-	log.Println("Server stopped")
+	logger.Println("Server stopped")
 }
 
-// Echo tool handler
+// handleEcho is a tool handler that echoes back the input message
 func handleEcho(ctx context.Context, request pocketbase.ToolCallRequest) (interface{}, error) {
-	// Extract the message parameter
 	message, ok := request.Parameters["message"].(string)
 	if !ok {
-		return nil, fmt.Errorf("missing or invalid 'message' parameter")
+		return nil, fmt.Errorf("invalid message parameter")
 	}
 
-	// Log that we received the request
-	log.Printf("Echoing message: %s", message)
-
-	// Return the echo response in the format expected by the MCP protocol
+	// Return the message
 	return map[string]interface{}{
 		"content": []map[string]interface{}{
 			{
@@ -393,27 +429,23 @@ func handleEcho(ctx context.Context, request pocketbase.ToolCallRequest) (interf
 	}, nil
 }
 
-// Weather tool handler
+// handleWeather is a tool handler that simulates getting weather for a location
 func handleWeather(ctx context.Context, request pocketbase.ToolCallRequest) (interface{}, error) {
-	// Extract the location parameter
 	location, ok := request.Parameters["location"].(string)
 	if !ok {
-		return nil, fmt.Errorf("missing or invalid 'location' parameter")
+		return nil, fmt.Errorf("invalid location parameter")
 	}
 
-	// Log that we received the request
-	log.Printf("Getting weather for: %s", location)
+	// Simulate a weather API call
+	// In a real application, this would call a weather API
+	weather := fmt.Sprintf("The weather in %s is sunny and 72°F", location)
 
-	// In a real app, we would call a weather API here
-	// For this example, we'll just return a mock response
-	weatherInfo := fmt.Sprintf("Weather for %s: 72°F, Partly Cloudy", location)
-
-	// Return the weather response in the format expected by the MCP protocol
+	// Return the weather
 	return map[string]interface{}{
 		"content": []map[string]interface{}{
 			{
 				"type": "text",
-				"text": weatherInfo,
+				"text": weather,
 			},
 		},
 	}, nil

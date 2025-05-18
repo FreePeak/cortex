@@ -1,15 +1,11 @@
 run:
   timeout: 5m
-  skip-files:
-    - ".*\\.pb\\.go$"
   allow-parallel-runners: true
   go: '1.24'
 
 linters-settings:
   errcheck:
     check-type-assertions: true
-  govet:
-    check-shadowing: true
   gofmt:
     simplify: true
   gocyclo:
@@ -42,6 +38,8 @@ linters:
     - unused
 
 issues:
+  exclude-files:
+    - ".*\\.pb\\.go$"
   exclude-rules:
     - path: _test\.go
       linters:
