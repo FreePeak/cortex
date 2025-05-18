@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FreePeak/cortex/pkg/server"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/FreePeak/cortex/pkg/server"
 )
 
 type mockTokenValidator struct {
